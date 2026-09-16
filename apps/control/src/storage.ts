@@ -15,6 +15,7 @@ import {
 	setAllowlistPath,
 } from "./auth/allowlist";
 import { type Auth, createAuth } from "./auth/auth";
+import { getEnabledAuthProviders } from "./auth/providers";
 import type { ControlConfig, ControlConfigInput } from "./config";
 import { loadControlConfig } from "./config";
 import { getLogger } from "./logging";
@@ -171,22 +172,16 @@ export class AppStorage {
 
 		// 6. Warn if no auth providers are configured (skipped in demo mode).
 		if (!this.config.demo) {
-			const hasGitHub = Boolean(
-				this.config.githubClientId && this.config.githubClientSecret,
-			);
-			const hasGoogle = Boolean(
-				this.config.googleClientId && this.config.googleClientSecret,
-			);
-			if (!hasGitHub && !hasGoogle) {
+			const enabled = getEnabledAuthProviders(this.config);
+			if (enabled.length === 0) {
 				log.warn("no OAuth providers configured — login will not work", {
 					baseUrl: this.config.baseUrl,
-					hint: "Set GITHUB_CLIENT_ID/SECRET or GOOGLE_CLIENT_ID/SECRET in your .env",
+					hint:
+						"Set GITHUB_CLIENT_ID/SECRET, GOOGLE_CLIENT_ID/SECRET, or " +
+						"AUTHENTIK_CLIENT_ID/SECRET+AUTHENTIK_ISSUER_URL in your .env",
 				});
 			} else {
-				log.debug("oauth providers configured", {
-					github: hasGitHub,
-					google: hasGoogle,
-				});
+				log.debug("oauth providers configured", { providers: enabled });
 			}
 		}
 	}

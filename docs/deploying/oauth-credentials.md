@@ -6,12 +6,15 @@ title: OAuth Credentials
 # OAuth Credentials
 
 CodeRunner does not store passwords. Sign-in is handled by
-[Better Auth](https://www.better-auth.com/) using GitHub and/or Google as OAuth
-providers. **At least one provider must be configured** for any non-demo
-deployment; without one, the login page has no working sign-in button.
+[Better Auth](https://www.better-auth.com/) using GitHub, Google, and/or a
+generic OIDC provider such as Authentik as OAuth providers. **At least one
+provider must be configured** for any non-demo deployment; without one, the
+login page has no working sign-in button.
 
-You only need both if you want students to choose between GitHub and Google;
-configuring one is fine.
+You only need one; configure more if you want students to choose between
+sign-in options, or if your team already runs Authentik (or another OIDC
+provider) as its identity provider and you'd rather point CodeRunner at it
+than register a separate GitHub/Google app.
 
 This page covers registering the OAuth apps and wiring the resulting
 credentials into CodeRunner. The values you produce here are used the same way
@@ -33,10 +36,14 @@ Every OAuth app registration asks for a homepage/origin URL and a redirect
   | --- | --- |
   | GitHub | `<BETTER_AUTH_URL>/api/auth/callback/github` |
   | Google | `<BETTER_AUTH_URL>/api/auth/callback/google` |
+  | Authentik (generic OIDC) | `<BETTER_AUTH_URL>/api/auth/oauth2/callback/authentik` |
 
 For local development that is `http://localhost:4000/api/auth/callback/github`
 and `.../google`. For the cloud VM it is
-`https://<your-domain>/api/auth/callback/github` and `.../google`.
+`https://<your-domain>/api/auth/callback/github` and `.../google`. Note the
+Authentik callback path is `/oauth2/callback/authentik`, not `/callback/authentik`
+— it's handled by Better Auth's `genericOAuth` plugin rather than a built-in
+social provider.
 
 ## Register a GitHub OAuth app
 
@@ -63,6 +70,26 @@ In the Google Cloud console:
 
 You now have a **Client ID** and a **Client Secret**.
 
+## Register an Authentik OAuth2/OpenID provider
+
+In Authentik: **Applications → Providers → Create**, type **OAuth2/OpenID
+Provider**.
+
+- **Client type:** Confidential.
+- **Redirect URIs:** `<BETTER_AUTH_URL>/api/auth/oauth2/callback/authentik`.
+- **Scopes:** include at least `openid`, `email`, and `profile`.
+
+Then **Applications → Applications → Create** and bind it to the provider you
+just made (e.g. slug `coderunner`). Authentik's OIDC discovery document for
+that application lives at
+`https://<your-authentik-domain>/application/o/<app-slug>/.well-known/openid-configuration`
+— CodeRunner uses this to discover the authorization/token/userinfo endpoints
+automatically, so you only need the base issuer URL
+(`https://<your-authentik-domain>/application/o/<app-slug>/`), not each
+endpoint individually.
+
+You now have a **Client ID**, a **Client Secret**, and an **issuer URL**.
+
 ## Wire the credentials into CodeRunner
 
 CodeRunner reads these from environment variables (see
@@ -76,9 +103,13 @@ CodeRunner reads these from environment variables (see
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `AUTHENTIK_CLIENT_ID` | Authentik OAuth2/OpenID provider client ID |
+| `AUTHENTIK_CLIENT_SECRET` | Authentik OAuth2/OpenID provider client secret |
+| `AUTHENTIK_ISSUER_URL` | Authentik application issuer, e.g. `https://authentik.example.com/application/o/coderunner/` |
 
-A provider only appears on the login page when **both** its ID and secret are
-set. Where these values live depends on the deployment:
+GitHub/Google only appear on the login page when **both** their ID and secret
+are set; Authentik requires all three of its variables. Where these values
+live depends on the deployment:
 
 - **Local:** in your `.env` file. See [Local Deployment](./local.md).
 - **Cloud VM:** in Google Secret Manager, materialized into the VM's `.env` by

@@ -24,6 +24,10 @@ export type ControlConfig = {
 	githubClientSecret: string | null;
 	googleClientId: string | null;
 	googleClientSecret: string | null;
+	authentikClientId: string | null;
+	authentikClientSecret: string | null;
+	/** Authentik application issuer, e.g. `https://authentik.example.com/application/o/coderunner/`. */
+	authentikIssuer: string | null;
 	dockerPath: string;
 	codeImage: string;
 	codeMemoryLimit: string;
@@ -334,6 +338,12 @@ export function loadControlConfig(
 		googleClientId: input.googleClientId ?? Bun.env.GOOGLE_CLIENT_ID ?? null,
 		googleClientSecret:
 			input.googleClientSecret ?? Bun.env.GOOGLE_CLIENT_SECRET ?? null,
+		authentikClientId:
+			input.authentikClientId ?? Bun.env.AUTHENTIK_CLIENT_ID ?? null,
+		authentikClientSecret:
+			input.authentikClientSecret ?? Bun.env.AUTHENTIK_CLIENT_SECRET ?? null,
+		authentikIssuer:
+			input.authentikIssuer ?? Bun.env.AUTHENTIK_ISSUER_URL ?? null,
 		dockerPath: input.dockerPath ?? Bun.env.FRC_DOCKER_PATH ?? "docker",
 		codeImage:
 			input.codeImage ??

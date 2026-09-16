@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { SiGithub, SiGoogle } from "react-icons/si";
+import { SiAuthentik, SiGithub, SiGoogle } from "react-icons/si";
 import { useSearchParams } from "react-router";
 import coderunnerMascotImg from "@/assets/coderunner-mascot.png";
 import { authClient } from "@/lib/auth-client";
@@ -10,13 +10,37 @@ import {
 import { cn } from "@/lib/utils";
 
 interface OAuthButtonProps {
-	provider: "github" | "google";
+	provider: AuthProvider;
 	disabled: boolean;
 	onClick: () => void;
 }
 
+const OAUTH_BUTTON_CONTENT: Record<
+	AuthProvider,
+	{ label: string; icon: typeof SiGithub; className: string }
+> = {
+	github: {
+		label: "Sign in with GitHub",
+		icon: SiGithub,
+		className:
+			"border-border bg-white/[0.06] text-foreground hover:bg-white/[0.11] hover:shadow-[0_0_18px_rgba(34,197,94,0.12)]",
+	},
+	google: {
+		label: "Sign in with Google",
+		icon: SiGoogle,
+		className:
+			"border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
+	},
+	authentik: {
+		label: "Sign in with Authentik",
+		icon: SiAuthentik,
+		className:
+			"border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
+	},
+};
+
 function OAuthButton({ provider, disabled, onClick }: OAuthButtonProps) {
-	const isGitHub = provider === "github";
+	const { label, icon: Icon, className } = OAUTH_BUTTON_CONTENT[provider];
 	return (
 		<div className="rounded-lg border border-border bg-card p-2">
 			<button
@@ -25,17 +49,11 @@ function OAuthButton({ provider, disabled, onClick }: OAuthButtonProps) {
 				disabled={disabled}
 				className={cn(
 					"flex h-11 w-full items-center justify-center gap-3 rounded-md border px-4 text-[13px] font-semibold tracking-wide transition-all disabled:cursor-not-allowed disabled:opacity-45",
-					isGitHub
-						? "border-border bg-white/[0.06] text-foreground hover:bg-white/[0.11] hover:shadow-[0_0_18px_rgba(34,197,94,0.12)]"
-						: "border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
+					className,
 				)}
 			>
-				{isGitHub ? (
-					<SiGithub className="size-[18px] shrink-0" />
-				) : (
-					<SiGoogle className="size-[18px] shrink-0" />
-				)}
-				{isGitHub ? "Sign in with GitHub" : "Sign in with Google"}
+				<Icon className="size-[18px] shrink-0" />
+				{label}
 			</button>
 		</div>
 	);
@@ -90,15 +108,23 @@ export function LoginPage() {
 		};
 	}, []);
 
-	async function signIn(provider: "github" | "google") {
+	async function signIn(provider: AuthProvider) {
 		setLoading(true);
 		setSignInError(null);
 		try {
-			await authClient.signIn.social({
-				provider,
-				callbackURL: "/",
-				errorCallbackURL: "/login",
-			});
+			if (provider === "authentik") {
+				await authClient.signIn.oauth2({
+					providerId: "authentik",
+					callbackURL: "/",
+					errorCallbackURL: "/login",
+				});
+			} else {
+				await authClient.signIn.social({
+					provider,
+					callbackURL: "/",
+					errorCallbackURL: "/login",
+				});
+			}
 		} catch (error) {
 			setLoading(false);
 			setSignInError(

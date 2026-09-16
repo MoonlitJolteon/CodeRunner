@@ -12,10 +12,14 @@
 import type { Database } from "bun:sqlite";
 import { type BetterAuthOptions, betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
+import { genericOAuth } from "better-auth/plugins";
 import type { ControlConfig } from "../config";
 import { getLogger } from "../logging";
 import { isEmailAllowed, reloadAllowlist } from "./allowlist";
-import { buildSocialProviders } from "./providers";
+import { buildGenericOAuthProviders, buildSocialProviders } from "./providers";
+
+/** Callback path used by `genericOAuth`, distinct from the core social-provider `/callback/:id`. */
+const GENERIC_OAUTH_CALLBACK_PATH = "/oauth2/callback/:providerId";
 
 const log = getLogger("auth");
 
@@ -61,6 +65,9 @@ export function createAuth(
 	callbacks: AuthCallbacks,
 ) {
 	const socialProviders = config.demo ? {} : buildSocialProviders(config);
+	const genericOAuthProviders = config.demo
+		? []
+		: buildGenericOAuthProviders(config);
 
 	const options: BetterAuthOptions = {
 		database: db,
@@ -68,6 +75,9 @@ export function createAuth(
 		basePath: "/api/auth",
 		secret: config.sessionSecret,
 		socialProviders,
+		plugins: genericOAuthProviders.length
+			? [genericOAuth({ config: genericOAuthProviders })]
+			: [],
 		session: {
 			expiresIn: 14 * 24 * 60 * 60, // 14 days in seconds
 			updateAge: 24 * 60 * 60, // refresh session expiry daily
@@ -132,8 +142,13 @@ export function createAuth(
 		},
 		hooks: {
 			after: createAuthMiddleware(async (ctx) => {
-				// Enforce allowlist on returning users (OAuth callback)
-				if (ctx.path === "/callback/:id") {
+				// Enforce allowlist on returning users (OAuth callback). Social
+				// providers (GitHub/Google) land on /callback/:id; the genericOAuth
+				// plugin (Authentik) uses its own callback path.
+				if (
+					ctx.path === "/callback/:id" ||
+					ctx.path === GENERIC_OAUTH_CALLBACK_PATH
+				) {
 					const newSession = ctx.context.newSession;
 					if (newSession) {
 						await refreshAllowlistBeforeCheck();
