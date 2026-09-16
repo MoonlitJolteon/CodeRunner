@@ -59,14 +59,22 @@ describe("release workflow", () => {
 			const output = join(temp, "output");
 			const result = await run(
 				script("validate", "validate"),
-				{ TAG: tag, ANCESTOR_STATUS: ancestry, GITHUB_OUTPUT: output },
+				{
+					TAG: tag,
+					ANCESTOR_STATUS: ancestry,
+					GITHUB_OUTPUT: output,
+					// Mixed-case on purpose: exercises the lowercasing (GHCR/OCI image
+					// references must be lowercase) rather than assuming an
+					// already-lowercase owner like the upstream repo's.
+					GITHUB_REPOSITORY_OWNER: "TestOwner",
+				},
 				git,
 			);
 			expect(result.code).toBe(code);
 			expect(result.stderr).toBe("");
 			if (code === 0) {
 				expect(await Bun.file(output).text()).toBe(
-					`tag=${tag}\ntag_sha=test-sha\nprerelease=${prerelease}\n`,
+					`tag=${tag}\ntag_sha=test-sha\nprerelease=${prerelease}\nimage_owner=testowner\n`,
 				);
 			}
 		} finally {
