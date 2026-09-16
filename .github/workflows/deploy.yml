@@ -16,10 +16,6 @@ concurrency:
   group: deploy-prod
   cancel-in-progress: false
 
-env:
-  WORKSPACE_IMAGE: ghcr.io/${{ github.repository_owner }}/coderunner-workspace
-  CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/coderunner-control
-
 jobs:
   preflight:
     runs-on: ubuntu-latest
@@ -42,6 +38,10 @@ jobs:
         id: check
         run: |
           set -euo pipefail
+
+          # GHCR/OCI image references must be lowercase.
+          WORKSPACE_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/coderunner-workspace"
+          CONTROL_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/coderunner-control"
 
           if ! echo "$TAG" | grep -qE '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
             echo "Refusing to deploy '$TAG'. Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease."

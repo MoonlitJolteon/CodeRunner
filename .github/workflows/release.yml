@@ -22,8 +22,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  WORKSPACE_IMAGE: ghcr.io/${{ github.repository_owner }}/coderunner-workspace
-  CONTROL_IMAGE: ghcr.io/${{ github.repository_owner }}/coderunner-control
+  # WORKSPACE_IMAGE/CONTROL_IMAGE are set per-job (from validate's lowercased
+  # image_owner output) instead of here, since GHCR/OCI image references must
+  # be lowercase and Actions expressions have no case-conversion function —
+  # see the comment in the validate job.
   # Pinned PathPlanner web release (mathewdunne/pathplanner-web). Both control
   # builds must resolve the same artifact, and a pinned tag makes a failed
   # download fatal instead of silently shipping an empty dist — see the
@@ -40,6 +42,7 @@ jobs:
       tag: ${{ steps.validate.outputs.tag }}
       tag_sha: ${{ steps.validate.outputs.tag_sha }}
       prerelease: ${{ steps.validate.outputs.prerelease }}
+      image_owner: ${{ steps.validate.outputs.image_owner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,6 +79,11 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "tag_sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          # GHCR/OCI image references must be lowercase; GitHub Actions
+          # expressions have no case-conversion function, so this is computed
+          # once here and threaded through as a job output instead of using
+          # ${{ github.repository_owner }} directly in image names.
+          echo "image_owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
   verify:
     needs: validate
@@ -115,6 +123,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      WORKSPACE_IMAGE: ghcr.io/${{ needs.validate.outputs.image_owner }}/coderunner-workspace
     steps:
       - uses: actions/checkout@v4
         with:
@@ -163,6 +173,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      CONTROL_IMAGE: ghcr.io/${{ needs.validate.outputs.image_owner }}/coderunner-control
     steps:
       - uses: actions/checkout@v4
         with:
@@ -249,6 +261,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      CONTROL_IMAGE: ghcr.io/${{ needs.validate.outputs.image_owner }}/coderunner-control
     steps:
       - uses: actions/checkout@v4
         with:
@@ -311,6 +325,8 @@ jobs:
     env:
       TAG: ${{ needs.validate.outputs.tag }}
       PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+      WORKSPACE_IMAGE: ghcr.io/${{ needs.validate.outputs.image_owner }}/coderunner-workspace
+      CONTROL_IMAGE: ghcr.io/${{ needs.validate.outputs.image_owner }}/coderunner-control
     steps:
       - uses: actions/download-artifact@v4
         with:
