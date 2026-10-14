@@ -127,7 +127,7 @@ ARG GRADLE_VERSION=3.18.0
 ARG JAVA_DEPS_VERSION=0.27.6
 ARG JAVA_PACK_VERSION=0.31.1
 ARG SPOTLESS_GRADLE_VERSION
-ARG CODERUNNER_DEBUG_VERSION=0.1.0
+ARG CODERUNNER_DEBUG_VERSION=0.1.1
 
 # Download pinned Open VSX and GitHub Release artifacts. Spotless is copied
 # from the pinned-source builder above.

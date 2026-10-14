@@ -5,33 +5,51 @@ import {
 	claimDebugRun,
 	DEBUG_SESSION_NAME,
 	type DebugMarker,
+	isPortListening,
 	isProcessAlive,
 	parseDebugMarker,
 	readTextFile,
 } from "./debug-marker";
 
-const ATTACH_ATTEMPTS = 10;
+const ATTACH_ATTEMPTS = 3;
+const LISTEN_POLL_MS = 250;
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Resolves true once the JDWP port is listening, false if the JVM exits first. */
+async function waitForListener(marker: DebugMarker): Promise<boolean> {
+	// No deadline of our own: the JVM's JDWP timeout ends the wait.
+	while (isProcessAlive(marker.pid)) {
+		if (isPortListening(readTextFile("/proc/net/tcp"), marker.port)) {
+			return true;
+		}
+		await delay(LISTEN_POLL_MS);
+	}
+	return false;
+}
+
 async function attach(marker: DebugMarker): Promise<void> {
+	if (!(await waitForListener(marker))) return;
 	for (let attempt = 0; attempt < ATTACH_ATTEMPTS; attempt += 1) {
-		// The marker is written just before the JVM opens the JDWP port.
-		await delay(attempt === 0 ? 300 : 1_000);
+		if (attempt > 0) await delay(1_000);
 		if (!isProcessAlive(marker.pid)) return;
-		const started = await vscode.debug.startDebugging(
-			vscode.workspace.workspaceFolders?.[0],
-			{
-				type: "java",
-				request: "attach",
-				name: DEBUG_SESSION_NAME,
-				hostName: "127.0.0.1",
-				port: marker.port,
-			},
-		);
-		if (started) return;
+		try {
+			const started = await vscode.debug.startDebugging(
+				vscode.workspace.workspaceFolders?.[0],
+				{
+					type: "java",
+					request: "attach",
+					name: DEBUG_SESSION_NAME,
+					hostName: "127.0.0.1",
+					port: marker.port,
+				},
+			);
+			if (started) return;
+		} catch {
+			// Treat a thrown start like a failed one and retry.
+		}
 	}
 }
 

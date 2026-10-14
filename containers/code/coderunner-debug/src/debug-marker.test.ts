@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	claimDebugRun,
+	isPortListening,
 	isProcessAlive,
 	parseDebugMarker,
 } from "./debug-marker";
@@ -44,5 +45,30 @@ describe("isProcessAlive", () => {
 	test("is true for this process and false for an unused pid", () => {
 		expect(isProcessAlive(process.pid)).toBe(true);
 		expect(isProcessAlive(2_147_483_646)).toBe(false);
+	});
+});
+
+describe("isPortListening", () => {
+	const header =
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+	const row = (local: string, state: string) =>
+		`   0: ${local} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000     0        0 12345 1 0000000000000000 100 0 0 10 0\n`;
+
+	test("finds the JDWP port in LISTEN state on loopback", () => {
+		expect(isPortListening(header + row("0100007F:138D", "0A"), 5005)).toBe(
+			true,
+		);
+	});
+
+	test("ignores other ports, non-listening sockets and missing data", () => {
+		expect(isPortListening(header + row("0100007F:16AA", "0A"), 5005)).toBe(
+			false,
+		);
+		// 01 = ESTABLISHED, e.g. a connection whose local port happens to match.
+		expect(isPortListening(header + row("0100007F:138D", "01"), 5005)).toBe(
+			false,
+		);
+		expect(isPortListening(header, 5005)).toBe(false);
+		expect(isPortListening(null, 5005)).toBe(false);
 	});
 });

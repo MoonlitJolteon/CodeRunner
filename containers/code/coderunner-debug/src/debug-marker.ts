@@ -56,3 +56,25 @@ export function isProcessAlive(pid: number): boolean {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
 }
+
+const TCP_LISTEN = "0A";
+
+/**
+ * Whether `/proc/net/tcp` shows a socket listening on `port`. Used to wait for
+ * the JDWP agent before attaching: a connect probe would use up its single
+ * accept.
+ */
+export function isPortListening(
+	procNetTcp: string | null,
+	port: number,
+): boolean {
+	if (!procNetTcp) return false;
+	const hexPort = port.toString(16).toUpperCase().padStart(4, "0");
+	return procNetTcp
+		.split("\n")
+		.slice(1)
+		.some((line) => {
+			const [, local, , state] = line.trim().split(/\s+/);
+			return local?.endsWith(`:${hexPort}`) === true && state === TCP_LISTEN;
+		});
+}
