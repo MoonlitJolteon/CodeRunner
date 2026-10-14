@@ -26,7 +26,8 @@ commit and push any work you want to keep.
 The WPILib extension can start or debug a simulation, but you should not use
 it here. Click **Start** in the Driver Station at the bottom of the page so
 CodeRunner can use its supported headless simulation setup and connect the
-controls and telemetry. To debug, use **Start ▾ → Debug** instead of WPILib's
+controls and telemetry. To debug, pick **Debug** from the **▾** beside **Start**
+and click it, instead of using WPILib's
 *Simulate Robot Code* or *Debug Robot Code*.
 
 :::
@@ -51,7 +52,8 @@ to change the layout.
 
 ### Debugging and building
 
-Click the **▾** beside **Start** for two more options:
+Use the **▾** beside **Start** to choose what the button does, then click it.
+The button shows the current choice:
 
 - **Debug** starts the simulation with the debugger connected. Set
   breakpoints in the editor first. The robot waits up to 2 minutes for the
