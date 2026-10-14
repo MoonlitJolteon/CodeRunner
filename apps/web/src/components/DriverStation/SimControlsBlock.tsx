@@ -36,6 +36,17 @@ function isSimRunMode(value: unknown): value is SimRunMode {
 	return typeof value === "string" && value in RUN_MODES;
 }
 
+const MODE_STORAGE_KEY = "coderunner:sim-run-mode";
+
+function readStoredMode(): SimRunMode {
+	try {
+		const stored = sessionStorage.getItem(MODE_STORAGE_KEY);
+		return isSimRunMode(stored) ? stored : "run";
+	} catch {
+		return "run";
+	}
+}
+
 interface SimButtonProps {
 	label: string;
 	Icon: typeof Play;
@@ -91,7 +102,16 @@ export function SimControlsBlock({
 	const canRestart = runStatus === "running";
 	const startDisabled = runBusy || !sessionReady;
 	// The menu picks what the Start button does; clicking the button runs it.
-	const [mode, setMode] = useState<SimRunMode>("run");
+	// Remembered for the session, like the right-pane tab.
+	const [mode, setMode] = useState<SimRunMode>(readStoredMode);
+	const chooseMode = (next: SimRunMode) => {
+		setMode(next);
+		try {
+			sessionStorage.setItem(MODE_STORAGE_KEY, next);
+		} catch {
+			// Session storage unavailable (private mode); the choice still applies.
+		}
+	};
 
 	return (
 		<div className="flex h-full min-h-0 flex-col gap-1.5 overflow-hidden rounded-lg border border-border bg-card p-1.5">
@@ -128,7 +148,7 @@ export function SimControlsBlock({
 							<DropdownMenuRadioGroup
 								value={mode}
 								onValueChange={(value) => {
-									if (isSimRunMode(value)) setMode(value);
+									if (isSimRunMode(value)) chooseMode(value);
 								}}
 							>
 								{(Object.keys(RUN_MODES) as SimRunMode[]).map((key) => {

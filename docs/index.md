@@ -37,7 +37,7 @@ CodeRunner is a self-hosted, browser-based IDE for teaching FRC robot programmin
 4. When robot code and communications are ready, choose a mode and click **Enable**.
 5. Use the **AdvantageScope** and **PathPlanner** tabs to inspect telemetry or edit paths.
 
-Use CodeRunner's **Start** button for robot projects, not the WPILib extension's simulation command (although standalone Builds can be run from the extension). Console lessons are the exception: run those with the editor's ▷ button.
+Use CodeRunner's **Start**, **Debug**, and **Build** controls for robot projects, not the WPILib extension's simulation, debugging, or build commands. Console lessons are the exception: run those with the editor's ▷ button.
 
 [Read the short student guide →](./using-coderunner.md)
 

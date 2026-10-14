@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { SimControlsBlock } from "./SimControlsBlock";
 
 describe("SimControlsBlock", () => {
+	afterEach(() => {
+		sessionStorage.clear();
+	});
+
 	test("start button enabled when idle and sessionReady", () => {
 		render(
 			<SimControlsBlock
@@ -163,5 +167,39 @@ describe("SimControlsBlock", () => {
 			/>,
 		);
 		expect(screen.getByTestId("run-mode-menu")).toBeDisabled();
+	});
+
+	test("remembers the chosen mode across reloads in this tab", async () => {
+		const user = userEvent.setup();
+		const props = {
+			runStatus: "idle" as const,
+			sessionReady: true,
+			onStart: () => {},
+			onStop: () => {},
+			onRestart: () => {},
+		};
+		const first = render(<SimControlsBlock {...props} />);
+		await user.click(screen.getByTestId("run-mode-menu"));
+		await user.click(
+			await screen.findByRole("menuitemradio", { name: /Debug/ }),
+		);
+		first.unmount();
+
+		render(<SimControlsBlock {...props} />);
+		expect(screen.getByTestId("run-button")).toHaveTextContent("Debug");
+	});
+
+	test("falls back to Start for an unknown stored mode", () => {
+		sessionStorage.setItem("coderunner:sim-run-mode", "profile");
+		render(
+			<SimControlsBlock
+				runStatus="idle"
+				sessionReady={true}
+				onStart={() => {}}
+				onStop={() => {}}
+				onRestart={() => {}}
+			/>,
+		);
+		expect(screen.getByTestId("run-button")).toHaveTextContent("Start");
 	});
 });
