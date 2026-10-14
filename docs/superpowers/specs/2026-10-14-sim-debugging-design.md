@@ -90,13 +90,13 @@ the session looks the same to the student.
   `mode: "run" | "debug" | "build"`, defaulting to `"run"`.
 - `restart` with no `mode` reuses the mode of the current (or most recent) run, as tracked by the
   control plane. It therefore survives a page reload mid-debug.
-- The run snapshot / sim status response includes the current run's `mode`,
-  so the UI can reflect it.
+- *(Amended during planning:)* the mode is **not** added to the sim status
+  response. Nothing in the UI uses it, and `restart` resolves it server-side.
 
 ### Control plane (`apps/control/src/runs.ts`, `app/workspace-routes.ts`)
 
 - `RunManager.start(workspace, connection?, mode = "run")`. The mode is stored
-  on the `RunJob` and the latest status, and reported in snapshots.
+  on the `RunJob` and remembered per workspace (`RunManager.lastMode()`).
 - The mode is validated against the enum, then passed into the container as
   `SIM_MODE=<mode>` on the existing `start-sim.sh` invocation in
   `dockerRunScript()`.
@@ -117,8 +117,8 @@ the session looks the same to the student.
 ### Container scripts (`containers/code/`)
 
 - **`start-sim.sh`**: passes `SIM_MODE` (default `run`) to `run-sim.sh` as a
-  new argument, and removes any stale `$HOME/sim-debug.json` and claim file
-  before starting.
+  new argument. Stale debug files are cleared by the `stop-sim.sh` call it
+  already makes.
 - **`run-sim.sh`**:
   - **run:** unchanged.
   - **build:** runs `./gradlew` with the same flags and init script, task
@@ -134,7 +134,8 @@ the session looks the same to the student.
   - The address is pinned to `127.0.0.1`. In network mode, workspaces share
     a Docker network, so `0.0.0.0` would let another workspace attach and
     run code in this JVM.
-- **`stop-sim.sh`**: removes `$HOME/sim-debug.json` and the claim file. Its
+- **`stop-sim.sh`**: removes `$HOME/sim-debug.json`, the claim files and
+  `$HOME/sim-stop-request`. Its
   process-name fallback match also covers the Gradle `build` invocation, not
   just `*simulate*`, so Stop works during a Build.
 
@@ -143,23 +144,31 @@ the session looks the same to the student.
 A small TypeScript VS Code extension.
 
 - **Manifest:** `extensionKind: ["workspace"]`, so it runs on the container
-  side with Node `fs`/`child_process`. It activates `onStartupFinished` and
-  declares `extensionDependencies: ["vscjava.vscode-java-debug"]`.
+  side with Node `fs`. It activates `onStartupFinished`. *(Amended:)* it
+  declares no `extensionDependencies`, because that would make
+  `codium-server --install-extension` fetch Java debug from the gallery and
+  break the pinned-extension check.
 - **Watching:** polls `$HOME/sim-debug.json` (`fs.watchFile`, ~500 ms). The
   path is outside the workspace folder, so VS Code's workspace file watchers
   don't apply.
 - **Claiming (multiple tabs):** each open editor tab has its own extension
   host. When a marker with a new pid appears, the host atomically creates
-  `$HOME/sim-debug.claim` (`O_EXCL`), containing that pid. Only the host
-  that creates it attaches. A claim file holding a different pid than the
-  marker is stale and may be replaced. Losing hosts do nothing.
+  `$HOME/sim-debug.<pid>.claim` (`O_EXCL`). Only the host that creates it
+  attaches, and losing hosts do nothing. *(Amended:)* a per-pid file name
+  replaces "one claim file, replace if stale", because replacing a stale file
+  is itself racy between two tabs.
 - **Attaching:** the claiming host calls `vscode.debug.startDebugging` with
   `{type: "java", request: "attach", name: "Debug Simulation", hostName:
   "127.0.0.1", port}`. It retries briefly (a few seconds) in case the JDWP
   listener isn't open yet.
 - **Debug toolbar Stop:** on `onDidTerminateDebugSession` for its own session,
-  the claiming host runs `/usr/local/bin/stop-sim.sh`, but only if the
-  attached pid is still alive *and* still equals `sim.pid`. When the sim
+  the claiming host requests a stop only if its `attach` succeeded (seen via
+  a debug adapter tracker) and the attached pid is still alive *and* still
+  equals `sim.pid`. *(Amended:)* the sim runs as **root** (`docker exec` has
+  no `--user`), while VSCodium runs as **abc**, so the extension can't run
+  `stop-sim.sh` against it. It writes the pid to `$HOME/sim-stop-request`
+  instead, and the control plane's debug-mode run script (root) polls that
+  file and runs `stop-sim.sh`. When the sim
   ended for any other reason (CodeRunner Stop, Restart, crash, JDWP timeout),
   the check is false and nothing happens. *(Subject to the fallback in the
   requirements.)*
@@ -205,8 +214,7 @@ A small TypeScript VS Code extension.
 
 ## Testing
 
-- **Contracts:** the schema accepts each mode and defaults to `run`; the
-  snapshot includes `mode`.
+- **Contracts:** the schema accepts each mode and rejects unknown ones.
 - **`runs.ts` / route tests:**
   - The mode reaches the run command as `SIM_MODE`.
   - A successful build ends **stopped**.
