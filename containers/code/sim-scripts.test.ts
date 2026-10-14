@@ -237,6 +237,7 @@ describe("sim container scripts", () => {
 
 	// gradlew that records its task and produces a runnable sim descriptor + jar.
 	const simulatingGradlew = [
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, not JS template literal
 		'printf "%s\\n" "${@: -1}" > "$PWD/gradle.task"',
 		"mkdir -p build/sim build/libs",
 		'printf \'[{"libraryDir":"%s","extensions":[]}]\' "$PWD/../lib" > build/sim/release_java.json',
@@ -297,6 +298,7 @@ describe("sim container scripts", () => {
 
 	test("run-sim build mode runs gradle build and starts no JVM", async () => {
 		const fixture = await createRunSimFixture([
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, not JS template literal
 			'printf "%s\\n" "${@: -1}" > "$PWD/gradle.task"',
 		]);
 		try {
