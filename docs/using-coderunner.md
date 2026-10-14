@@ -23,10 +23,11 @@ commit and push any work you want to keep.
 
 :::important[Start the simulation from CodeRunner]
 
-Use CodeRunner's **Start**, **Debug**, and **Build** controls in the Driver
-Station at the bottom of the page. They use CodeRunner's supported headless
-simulation setup and connect the controls and telemetry. **Do not use** WPILib's
-*Simulate Robot Code*, *Debug Robot Code*, or *Build Robot Code* commands in CodeRunner.
+Click **Start** in the Driver Station at the bottom of the page for normal
+robot simulation. The **▾** beside it also offers **Debug** and **Build** when
+you need them. These controls are designed to work with CodeRunner and let you
+control your code from the browser. **Do not use** WPILib's *Simulate Robot
+Code*, *Debug Robot Code*, or *Build Robot Code* commands in CodeRunner.
 
 :::
 
