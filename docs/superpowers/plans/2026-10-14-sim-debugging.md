@@ -5,10 +5,10 @@
 **Goal:** Add **Debug** and **Build** run modes behind a split Start button. A Debug run's robot JVM waits for VSCodium's Java debugger, which a bundled CodeRunner extension attaches automatically.
 
 **Architecture:** The web shell sends `mode` on `POST /api/sim/run`. `RunManager` stores it per run and passes `SIM_MODE` to `start-sim.sh` → `run-sim.sh`.
-- In debug mode, `run-sim.sh` adds a JDWP agent on `127.0.0.1:5005` (`suspend=y`, 30 s timeout) and writes `$HOME/sim-debug.json` before `exec java`.
+- In debug mode, `run-sim.sh` adds a JDWP agent on `127.0.0.1:5005` (`suspend=y`, 120 s attach timeout) and writes `$HOME/sim-debug.json` before `exec java`.
 - A small workspace-side VS Code extension (`containers/code/coderunner-debug`) polls for that file, claims the run (one editor tab wins), and calls `vscode.debug.startDebugging` with a Java `attach` config.
 - Build mode runs `./gradlew build` and exits.
-- Because the sim runs as **root** (`docker exec` has no `--user`) but VSCodium runs as **abc**, the debug toolbar's Stop goes through a root-side relay: the extension writes `$HOME/sim-stop-request`, and the control plane's debug run script polls it.
+- The debug toolbar's Stop just disconnects (VS Code's default for attach sessions); the sim is stopped with CodeRunner's Stop. *(Stopping the sim from the debugger was dropped after review: the sim runs as root and VSCodium as abc, so it needed a root-side relay that could race with Restart.)*
 
 **Tech Stack:** Bun + TypeScript (control plane, contracts, tests), React + Vitest + Base UI menu (web), Bash (container scripts), VS Code extension API with esbuild + `@vscode/vsce` in a Docker build stage, Playwright (E2E).
 
@@ -16,13 +16,13 @@
 
 ## Global Constraints
 
-- JDWP agent string, verbatim: `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=30000`. Never bind `0.0.0.0` or a bare port.
+- JDWP agent string, verbatim: `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000`. Never bind `0.0.0.0` or a bare port.
 - Start (`mode: "run"`) must produce exactly today's Gradle task (`simulateExternalJavaRelease`) and the same robot JVM args (no agent, no marker file).
 - No changes to student project files (`.vscode/launch.json`, `build.gradle`, …).
 - Debug session name, verbatim: `Debug Simulation`.
-- Console line, verbatim: `Waiting up to 30s for the editor's debugger to attach on port 5005...`
+- Console line, verbatim: `Waiting up to 120s for the editor's debugger to attach on port 5005...`
 - Mode values, verbatim: `"run" | "debug" | "build"`; omitted means `"run"` (except `restart`, which reuses the last mode).
-- File names under `$HOME` (`/config` in the image): `sim-debug.json`, `sim-debug.<pid>.claim`, `sim-stop-request`.
+- File names under `$HOME` (`/config` in the image): `sim-debug.json`, `sim-debug.<pid>.claim`.
 - Bump `containers/code/coderunner-debug/package.json` `version` (and the Dockerfile `CODERUNNER_DEBUG_VERSION` ARG) on every extension change. `reconcile-frc-extensions` only updates existing workspaces when `id@version` changes.
 - Run `bun run check:fix` before every commit (Biome format + lint + import order).
 - End every commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -32,7 +32,7 @@
 1. **Build output that mentions NetworkTables.** Gradle logs during a Build (dependency downloads like `networktables`, test output with `NT4`) must not flip the run to **running**. That is the readiness regex in `runs.ts`. Test in Task 3.
 2. **A click event leaking in as the mode.** `SimButton`'s `onClick` passes a React event. If Start were wired as `onClick={onStart}` with `onStart(mode?)`, the event would be sent as `mode` and the request would 400. Test in Task 4 asserts `onStart` is called with exactly `"run"`.
 3. **Two editor tabs open.** Each tab has its own extension host. Exactly one may claim a sim pid, and the loser must never attach or request a stop. Test in Task 6.
-4. **Debug session ends because the sim already ended** (CodeRunner Stop, Restart, JDWP timeout, crash) **or the attach failed.** In these cases no stop request may be written, or a new run could be killed. Tests in Task 7.
+4. **A debug run paused at a startup breakpoint.** A breakpoint in `Main.java` or a static initializer pauses the JVM before the NT4 readiness line. The normal run/startup timeout must not kill an attached, paused JVM. In debug mode, the readiness timer is cancelled once the JVM prints the "Waiting up to 120s…" line; the JDWP `timeout` covers the attach wait. Test in Task 3.
 5. **Gradle fails silently in Build mode.** If Gradle is killed or OOMs without printing `BUILD FAILED`, the run must still end **failed**, not **stopped**: `run-sim.sh` prints its own `BUILD FAILED` line on any non-zero Gradle exit. Test in Task 2.
 
 ---
@@ -46,7 +46,7 @@
 | `containers/code/run-sim.sh` | Per-mode Gradle task; JDWP agent + marker in debug |
 | `containers/code/stop-sim.sh` | Remove marker/claim/stop-request files; match Build's Gradle in the fallback |
 | `containers/code/sim-scripts.test.ts` | Script behaviour per mode |
-| `apps/control/src/runs.ts` | Mode on jobs, `SIM_MODE` in the run script, build terminal state/timeout, `lastMode()`, debug stop relay |
+| `apps/control/src/runs.ts` | Mode on jobs, `SIM_MODE` in the run script, build terminal state/timeout, `lastMode()`, debug readiness-timer handling |
 | `apps/control/src/app/workspace-routes.ts` | Resolve `mode` for `start`/`restart` |
 | `apps/web/src/hooks/useSimulationState.ts` | `startRun(mode?)` |
 | `apps/web/src/components/DriverStation/SimControlsBlock.tsx` | Split Start button + menu |
@@ -152,7 +152,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `SIM_MODE` env (`run` | `debug` | `build`, default `run`) on `start-sim.sh`, set by Task 3.
-- Produces: `run-sim.sh` 7th positional arg `<mode>`. In debug it writes `$HOME/sim-debug.json` = `{"port":5005,"pid":<jvm pid>}`. `stop-sim.sh` removes `$HOME/sim-debug.json`, `$HOME/sim-debug.*.claim` and `$HOME/sim-stop-request`. Tasks 6–7 rely on these names.
+- Produces: `run-sim.sh` 7th positional arg `<mode>`. In debug it writes `$HOME/sim-debug.json` = `{"port":5005,"pid":<jvm pid>}`. `stop-sim.sh` removes `$HOME/sim-debug.json` and `$HOME/sim-debug.*.claim`. Task 6 relies on these names.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -257,13 +257,13 @@ Append a helper and four tests inside the existing `describe("sim container scri
 			const result = await fixture.run("debug");
 			expect(result.exitCode).toBe(0);
 			expect(result.stdout).toContain(
-				"Waiting up to 30s for the editor's debugger to attach on port 5005...",
+				"Waiting up to 120s for the editor's debugger to attach on port 5005...",
 			);
 			const javaArgs = (
 				await readFile(join(fixture.root, "java.args"), "utf8")
 			).split("\n");
 			const agent =
-				"-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=30000";
+				"-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000";
 			expect(javaArgs).toContain(agent);
 			expect(javaArgs.indexOf(agent)).toBeLessThan(javaArgs.indexOf("-jar"));
 			const javaPid = Number(
@@ -319,15 +319,11 @@ Append a helper and four tests inside the existing `describe("sim container scri
 		}
 	});
 
-	test("stop-sim removes debug marker, claims and stop requests", async () => {
+	test("stop-sim removes the debug marker and claims", async () => {
 		const root = await mkdtemp(join(tmpdir(), "frc-sim-debug-files-"));
 		const home = join(root, "home");
 		await mkdir(home, { recursive: true });
-		for (const name of [
-			"sim-debug.json",
-			"sim-debug.4242.claim",
-			"sim-stop-request",
-		]) {
+		for (const name of ["sim-debug.json", "sim-debug.4242.claim"]) {
 			await writeFile(join(home, name), "x", "utf8");
 		}
 		try {
@@ -343,11 +339,7 @@ Append a helper and four tests inside the existing `describe("sim container scri
 				stderr: "ignore",
 			});
 			expect(await stop.exited).toBe(0);
-			for (const name of [
-				"sim-debug.json",
-				"sim-debug.4242.claim",
-				"sim-stop-request",
-			]) {
+			for (const name of ["sim-debug.json", "sim-debug.4242.claim"]) {
 				expect(
 					await readFile(join(home, name), "utf8").catch(() => null),
 				).toBeNull();
@@ -474,8 +466,8 @@ Immediately before the final `exec java ...` line, add:
 if [[ "$sim_mode" == "debug" ]]; then
   # Loopback only: in network mode workspaces share a Docker network, and an
   # attached debugger can run arbitrary code in this JVM.
-  java_args+=("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debug_port},timeout=30000")
-  echo "Waiting up to 30s for the editor's debugger to attach on port ${debug_port}..."
+  java_args+=("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debug_port},timeout=120000")
+  echo "Waiting up to 120s for the editor's debugger to attach on port ${debug_port}..."
   # $$ survives exec, so this is the robot JVM's pid (and sim.pid's).
   printf '{"port":%s,"pid":%s}\n' "$debug_port" "$$" >"$debug_marker"
 fi
@@ -508,7 +500,7 @@ After the `project_root=` line, add:
 ```bash
 # Debug-run handshake files (see run-sim.sh and the coderunner-debug extension).
 clear_sim_files() {
-  rm -f "$pid_file" "$HOME/sim-debug.json" "$HOME"/sim-debug.*.claim "$HOME/sim-stop-request"
+  rm -f "$pid_file" "$HOME/sim-debug.json" "$HOME"/sim-debug.*.claim
 }
 ```
 
@@ -569,7 +561,6 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `RunManager.start(workspace: WorkspaceRow, connection?: RunConnection | null, mode?: SimRunMode): string` (default `"run"`)
   - `RunManager.lastMode(workspaceId: WorkspaceId): SimRunMode`
 
-  Task 7 adds lines to `dockerRunScript` for `mode === "debug"`.
 
 - [ ] **Step 1: Write failing `runs.test.ts` tests**
 
@@ -695,6 +686,41 @@ Change the import `import type { RunCommandFactory } from "../runs";` to `import
 				codeImage: "coderunner-workspace:test",
 				simPortRange: { start: 25900, end: 25909 },
 				vscodePortRange: { start: 33160, end: 33169 },
+			},
+		);
+	});
+
+	test("a debug run waiting on the debugger is not failed by the readiness timeout", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const connection = app.runs.connect(workspace, () => {});
+				const runId = app.runs.start(workspace, connection, "debug");
+				await waitFor(() => controlled.commands.length === 1);
+				controlled.commands[0]?.writeStdout(
+					"Waiting up to 120s for the editor's debugger to attach on port 5005...",
+				);
+				// Well past runBuildTimeoutMs + simStartupTimeoutMs (40 ms).
+				await Bun.sleep(150);
+				expect(controlled.commands[0]?.killed).toBe(false);
+				expect(app.storage.getRunJob(runId)).toMatchObject({
+					state: "building",
+				});
+				expect(app.runs.activeBuildCount()).toBe(0);
+				app.runs.stopWorkspace(workspace.id);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				runBuildTimeoutMs: 20,
+				simStartupTimeoutMs: 20,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25780, end: 25789 },
+				vscodePortRange: { start: 33170, end: 33179 },
 			},
 		);
 	});
@@ -877,6 +903,30 @@ In `timeoutBeforeReadiness`, replace the `recordLog` message argument with
 			lineLooksReady(line)
 		) {
 ```
+
+11. Debug runs: once the JVM is up and waiting for the debugger, cancel the build/startup deadline (and free the build slot). A student paused at a breakpoint before the NT4 readiness line must not be failed; the JDWP `timeout` in `run-sim.sh` covers the attach wait. Add near the top of the file:
+
+```ts
+/** Printed by run-sim.sh in debug mode right before exec'ing the robot JVM. */
+const DEBUG_WAITING_LINE = "for the editor's debugger to attach";
+```
+
+and in `recordLog`, directly before the readiness `if`:
+
+```ts
+		if (
+			job.mode === "debug" &&
+			!job.finished &&
+			job.buildSlotHeld &&
+			line.includes(DEBUG_WAITING_LINE)
+		) {
+			// The build is done and the JVM is waiting for (or paused in) the
+			// debugger: no deadline from here on.
+			this.releaseBuildSlot(job);
+		}
+```
+
+(`releaseBuildSlot` already clears `readinessTimer`.)
 
 - [ ] **Step 5: Implement the route**
 
@@ -1229,9 +1279,6 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `$HOME/sim-debug.json` `{port, pid}` and the `sim-debug.*.claim` cleanup in `stop-sim.sh` (Task 2).
 - Produces:
   - Exports from `src/debug-marker.ts`: `DEBUG_SESSION_NAME`, `type DebugMarker = { port: number; pid: number }`, `parseDebugMarker(text: string | null): DebugMarker | null`, `readTextFile(path: string): string | null`, `claimDebugRun(home: string, pid: number): boolean`, `isProcessAlive(pid: number): boolean`
-  - Debug config field `coderunnerSimPid: number` on the attach configuration.
-
-  Task 7 adds to both files.
 
 - [ ] **Step 1: Write the failing pure-module tests**
 
@@ -1479,7 +1526,6 @@ async function attach(marker: DebugMarker): Promise<void> {
 				name: DEBUG_SESSION_NAME,
 				hostName: "127.0.0.1",
 				port: marker.port,
-				coderunnerSimPid: marker.pid,
 			},
 		);
 		if (started) return;
@@ -1562,223 +1608,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Debug toolbar Stop stops the sim (droppable)
-
-> **Fallback (agreed in the spec):** if this proves unreliable during the manual check in Task 8, revert this task's commit. The debug toolbar's Stop then just disconnects (VS Code's default for attach sessions), and the docs say so.
-
-**Files:**
-- Modify: `containers/code/coderunner-debug/src/debug-marker.ts`, `src/extension.ts`, `src/debug-marker.test.ts`, `package.json` (version `0.1.1`)
-- Modify: `containers/code/Dockerfile` (`ARG CODERUNNER_DEBUG_VERSION=0.1.1`)
-- Modify: `apps/control/src/runs.ts` (`dockerRunScript`)
-- Test: `apps/control/src/__tests__/runs.test.ts`
-
-**Interfaces:**
-- Consumes: `coderunnerSimPid` on the attach config, `readTextFile`, `isProcessAlive` (Task 6). `dockerRunScript(mode)` (Task 3). `stop-sim.sh` removes `sim-stop-request` (Task 2).
-- Produces: `parseSimPid(text: string | null): number | null`, `shouldRequestSimStop(input: { wasAttached: boolean; attachedPid: number; currentSimPid: number | null; isAlive: (pid: number) => boolean }): boolean`. File contract: the extension writes `<pid>\n` to `$HOME/sim-stop-request`, and the root-side relay in the debug run script runs `stop-sim.sh` when the content equals the running sim's pid.
-
-- [ ] **Step 1: Write failing tests**
-
-Append to `debug-marker.test.ts` (add `parseSimPid, shouldRequestSimStop` to the import):
-
-```ts
-describe("parseSimPid", () => {
-	test("reads sim.pid", () => {
-		expect(parseSimPid("4242\n")).toBe(4242);
-		expect(parseSimPid(null)).toBeNull();
-		expect(parseSimPid("nope")).toBeNull();
-	});
-});
-
-describe("shouldRequestSimStop", () => {
-	const alive = () => true;
-	const dead = () => false;
-
-	test("stops only an attached, still-running, still-current sim", () => {
-		expect(
-			shouldRequestSimStop({
-				wasAttached: true,
-				attachedPid: 4242,
-				currentSimPid: 4242,
-				isAlive: alive,
-			}),
-		).toBe(true);
-	});
-
-	test("never stops when the attach failed (e.g. losing retry)", () => {
-		expect(
-			shouldRequestSimStop({
-				wasAttached: false,
-				attachedPid: 4242,
-				currentSimPid: 4242,
-				isAlive: alive,
-			}),
-		).toBe(false);
-	});
-
-	test("never stops a newer run after Restart", () => {
-		expect(
-			shouldRequestSimStop({
-				wasAttached: true,
-				attachedPid: 4242,
-				currentSimPid: 5151,
-				isAlive: alive,
-			}),
-		).toBe(false);
-	});
-
-	test("does nothing when the sim already ended", () => {
-		expect(
-			shouldRequestSimStop({
-				wasAttached: true,
-				attachedPid: 4242,
-				currentSimPid: 4242,
-				isAlive: dead,
-			}),
-		).toBe(false);
-		expect(
-			shouldRequestSimStop({
-				wasAttached: true,
-				attachedPid: 4242,
-				currentSimPid: null,
-				isAlive: alive,
-			}),
-		).toBe(false);
-	});
-});
-```
-
-Append to `runs.test.ts` (inside the describe):
-
-```ts
-	test("only the debug run script relays editor stop requests", () => {
-		expect(dockerRunScript("debug")).toContain("sim-stop-request");
-		expect(dockerRunScript("run")).not.toContain("sim-stop-request");
-		expect(dockerRunScript("build")).not.toContain("sim-stop-request");
-	});
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `bun test containers/code/coderunner-debug apps/control/src/__tests__/runs.test.ts`
-Expected: new tests FAIL.
-
-- [ ] **Step 3: Implement the decision helpers**
-
-Append to `debug-marker.ts`:
-
-```ts
-export function parseSimPid(text: string | null): number | null {
-	const pid = Number.parseInt(text?.trim() ?? "", 10);
-	return Number.isInteger(pid) && pid > 0 ? pid : null;
-}
-
-/**
- * Stop the sim when the student ends our debug session, but never when the
- * session ended because the sim already did (Stop, Restart, crash, JDWP
- * timeout) or because this host's attach never succeeded.
- */
-export function shouldRequestSimStop(input: {
-	wasAttached: boolean;
-	attachedPid: number;
-	currentSimPid: number | null;
-	isAlive: (pid: number) => boolean;
-}): boolean {
-	return (
-		input.wasAttached &&
-		input.currentSimPid === input.attachedPid &&
-		input.isAlive(input.attachedPid)
-	);
-}
-```
-
-- [ ] **Step 4: Wire it in `extension.ts`**
-
-Add `writeFileSync` to the `node:fs` import and `parseSimPid, shouldRequestSimStop` to the `./debug-marker` import. At the end of `activate`:
-
-```ts
-	// The sim runs as root; this host runs as abc and can't signal it. The
-	// control plane's debug run script watches this file and stops the sim.
-	const stopRequestPath = join(home, "sim-stop-request");
-	const simPidPath = process.env.SIM_PID_FILE ?? join(home, "sim.pid");
-	const attachedSessions = new Set<string>();
-
-	context.subscriptions.push(
-		vscode.debug.registerDebugAdapterTrackerFactory("java", {
-			createDebugAdapterTracker(session) {
-				if (typeof session.configuration.coderunnerSimPid !== "number") {
-					return undefined;
-				}
-				return {
-					onDidSendMessage(message: {
-						type?: string;
-						command?: string;
-						success?: boolean;
-					}) {
-						if (
-							message.type === "response" &&
-							message.command === "attach" &&
-							message.success === true
-						) {
-							attachedSessions.add(session.id);
-						}
-					},
-				};
-			},
-		}),
-		vscode.debug.onDidTerminateDebugSession((session) => {
-			const wasAttached = attachedSessions.delete(session.id);
-			const attachedPid = session.configuration.coderunnerSimPid;
-			if (typeof attachedPid !== "number") return;
-			if (
-				shouldRequestSimStop({
-					wasAttached,
-					attachedPid,
-					currentSimPid: parseSimPid(readTextFile(simPidPath)),
-					isAlive: isProcessAlive,
-				})
-			) {
-				writeFileSync(stopRequestPath, `${attachedPid}\n`);
-			}
-		}),
-	);
-```
-
-Bump the version to `0.1.1` in `coderunner-debug/package.json`, and set `ARG CODERUNNER_DEBUG_VERSION=0.1.1` in the Dockerfile.
-
-- [ ] **Step 5: Add the root-side relay**
-
-In `runs.ts`, above `dockerRunScript`:
-
-```ts
-// Debug runs only. The editor (user abc) can't signal the root-owned sim, so
-// the coderunner-debug extension writes the sim's pid to this file when the
-// student presses Stop on the debug toolbar, and this loop stops the sim.
-const DEBUG_STOP_RELAY = [
-	'stop_request="$HOME/sim-stop-request"',
-	'( while kill -0 "$pid" 2>/dev/null; do if [[ "$(cat "$stop_request" 2>/dev/null)" == "$pid" ]]; then rm -f "$stop_request"; /usr/local/bin/stop-sim.sh; fi; sleep 0.5; done ) >/dev/null 2>&1 &',
-];
-```
-
-In `dockerRunScript`, insert `...(mode === "debug" ? DEBUG_STOP_RELAY : []),` directly after the `'pid="$(cat "$pid_file")"',` line.
-
-- [ ] **Step 6: Run tests to verify they pass**
-
-Run: `bun test containers/code apps/control && bun run typecheck`
-Expected: PASS.
-
-- [ ] **Step 7: Commit**
-
-```bash
-bun run check:fix
-git add containers/code/coderunner-debug containers/code/Dockerfile apps/control/src/runs.ts apps/control/src/__tests__/runs.test.ts
-git commit -m "feat(debug): debug toolbar Stop stops the sim via a root-side relay (#27)
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-```
-
----
-
-### Task 8: Real-image verification
+### Task 7: Real-image verification
 
 **Files:**
 - Modify: `e2e/specs/smoke-docker/java-tooling.spec.ts` (after the existing `stop-sim.sh` call, before `const robotLogs = ...`)
@@ -1819,7 +1649,7 @@ Insert after the existing `stop-sim.sh` `docker([...])` call:
 				180_000,
 			);
 			expect(debugLog).toContain(
-				"Waiting up to 30s for the editor's debugger to attach on port 5005...",
+				"Waiting up to 120s for the editor's debugger to attach on port 5005...",
 			);
 			expect(debugLog).not.toMatch(/ERROR: JDWP|transport error/);
 			await expect(page.locator(".debug-toolbar")).toBeVisible();
@@ -1843,14 +1673,16 @@ Expected: PASS, including `[java-smoke] starting a Debug run`.
 
 Run the real app (`bun run dev:control` + `bun run dev:web` with the locally built image) on a robot lesson, and check each item:
 
-- [ ] **Debug** → console shows the "Waiting up to 30s…" line → the debug toolbar appears with no user action.
+- [ ] **Debug** → console shows the "Waiting up to 120s…" line → the debug toolbar appears with no user action.
 - [ ] A breakpoint in `Robot.robotInit()` is hit, and Step Over, Variables and Call Stack work.
 - [ ] After **Continue**, Robot Code goes green, and **Enable** in the Driver Station works. While paused at a breakpoint, AdvantageScope stays connected (values freeze).
-- [ ] **Debug toolbar Stop** stops the sim, and CodeRunner shows stopped (Task 7). *If this misbehaves, apply the Task 7 fallback.*
+- [ ] **Debug toolbar Stop/Disconnect** detaches the debugger; the sim keeps running until CodeRunner's **Stop**.
 - [ ] **CodeRunner Stop** while debugging ends the debug session, and nothing else happens.
 - [ ] **Restart** during a debug run starts a new debug run, and the debugger reattaches.
 - [ ] With two editor tabs open on the workspace, **Debug** gives exactly one debug session.
-- [ ] With the editor tab closed, **Debug** fails after ~30 s with a JDWP error in the console, and the run ends failed.
+- [ ] With the editor tab closed, **Debug** fails after ~120 s with a JDWP error in the console, and the run ends failed.
+- [ ] A breakpoint in `Main.java` (before `RobotBase.startRobot`) can stay paused longer than the normal startup timeout without the run being failed.
+- [ ] Open a project in a fresh workspace and click **Debug** right away (cold Java import): the debugger still attaches.
 - [ ] **Build** on a clean project ends stopped with `BUILD SUCCESSFUL`. Introduce a compile error, and **Build** ends failed.
 - [ ] **Stop** during a **Build** ends the Gradle process.
 - [ ] Plain **Start** behaves exactly as before.
@@ -1867,7 +1699,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Docs and decision log
+### Task 8: Docs and decision log
 
 **Files:**
 - Modify: `docs/using-coderunner.md` (the `:::important` block at the top of "Robot lessons and imported projects", plus a new subsection before `## PathPlanner`)
@@ -1894,19 +1726,19 @@ Insert before `## PathPlanner`:
 Click the **▾** beside **Start** for two more options:
 
 - **Debug** starts the simulation with the debugger connected. Set
-  breakpoints in the editor first. The robot waits up to 30 seconds for the
+  breakpoints in the editor first. The robot waits up to 2 minutes for the
   editor's debugger, which connects by itself, so breakpoints in your `Robot`
   constructor and `robotInit` are hit. Use the debug toolbar to step,
   continue and inspect variables. While your code is paused, the robot stops
   running its loop (expect loop-overrun warnings), and AdvantageScope's
-  values freeze. **Stop** on the debug toolbar stops the simulation, the same
-  as **Stop** in the Driver Station. Keep the editor open: if nothing
-  connects within 30 seconds, the run fails.
+  values freeze. **Disconnect** on the debug toolbar detaches the debugger
+  and leaves the simulation running; use **Stop** in the Driver Station to
+  end it. Keep the editor open: if nothing connects within 2 minutes (for
+  example, the editor tab was closed or reloaded while the robot was
+  starting), the run fails and you can click **Debug** again.
 - **Build** compiles your project and runs its tests (`./gradlew build`)
   without starting the simulation. The output appears in the **Console** tab.
 ```
-
-(If Task 7 was dropped, replace the Stop sentence with: "**Disconnect** on the debug toolbar detaches the debugger and leaves the simulation running; use **Stop** in the Driver Station to end it.")
 
 - [ ] **Step 2: Write the decision log**
 
@@ -1925,14 +1757,19 @@ travels as `mode` on `POST /api/sim/run` → `RunManager` → `SIM_MODE` →
 under the debugger. That would run a second, unmanaged sim beside ours: it
 needs the Sim GUI (X11) and competes for port 3300. CodeRunner keeps owning
 the JVM (decision 025), and in debug mode adds
-`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=30000`.
+`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000`.
 
 - **Loopback only.** In network mode, workspaces share a Docker network. A
   JDWP port on `0.0.0.0` would let one student run code in another's JVM.
-- **`suspend=y` with a 30 s timeout.** Breakpoints in startup code are hit.
-  If nothing attaches, the JVM exits and the run fails, rather than hanging
-  until the readiness timeout. Readiness detection is unchanged: the NT4 line
-  appears once the JVM resumes.
+- **`suspend=y` with a 120 s timeout.** Breakpoints in startup code are hit.
+  If nothing attaches, the JVM exits and the run fails. 120 s, not 30 s:
+  Java Debug won't resolve an attach until the Java language server has
+  imported the project (about 40 s in decision 036, longer for large
+  projects), and a student may click Debug right after opening one.
+- **No readiness deadline once the JVM is up.** In debug mode, the run's
+  build/startup timer is cancelled when the JVM prints its "Waiting…" line,
+  so a student paused at a breakpoint before the NT4 readiness line (e.g. in
+  `Main.java`) isn't failed. The JDWP timeout covers the attach wait.
 
 **Who attaches.** A bundled extension, `coderunner-debug` (built in a
 Dockerfile stage like Spotless, installed with the pinned extensions), polls
@@ -1943,13 +1780,15 @@ attach is claimed per sim pid with an `O_EXCL` file
 proxy was rejected as new authenticated plumbing for a container-local
 event.
 
-**Debug toolbar Stop.** The sim runs as root (`docker exec` without
-`--user`), while VSCodium runs as `abc`. The extension therefore can't signal
-the sim. Instead, it writes the sim's pid to `$HOME/sim-stop-request`, and
-the root-side debug run script polls that file and runs `stop-sim.sh`. It
-only does so for a session whose `attach` succeeded, while that pid is still
-alive and still in `sim.pid`, so a Restart's new run is never stopped.
-*(If this is ever removed, the toolbar's Stop just disconnects.)*
+**Debug toolbar Stop only disconnects.** Stopping the sim from the debugger
+was designed and then dropped after review. The sim runs as root
+(`docker exec` without `--user`) while VSCodium runs as `abc`, so it needed a
+root-side relay, which could race with Restart and kill the new run. Students
+stop the sim with CodeRunner's Stop.
+
+**Known limitation.** The attach claim belongs to whichever editor tab took
+it. If that tab is closed or reloaded during startup, no other tab retries,
+and the run fails at the JDWP timeout; clicking Debug again works.
 
 **Build** runs `./gradlew build` (what WPILib's *Build Robot Code* runs, tests
 included). It skips readiness detection, so Gradle output mentioning
@@ -1977,7 +1816,7 @@ After the **Auth0 SSO** status paragraph, add:
 **Sim debugging (post-V2):** Start is a split button with **Debug** and
 **Build** run modes (`mode` on `POST /api/sim/run`, `SIM_MODE` into
 `run-sim.sh`). Debug starts the robot JVM with a loopback JDWP agent
-(`suspend=y`, 30 s) and writes `$HOME/sim-debug.json`. The bundled
+(`suspend=y`, 120 s) and writes `$HOME/sim-debug.json`. The bundled
 `containers/code/coderunner-debug` extension attaches VSCodium's Java
 debugger. Bump its version together with the Dockerfile's
 `CODERUNNER_DEBUG_VERSION`. See `docs/decisions/045-sim-debugging.md`.

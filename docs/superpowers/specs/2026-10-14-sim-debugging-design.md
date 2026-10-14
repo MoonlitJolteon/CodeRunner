@@ -33,9 +33,14 @@ From the brainstorming conversation:
   working.
 - **Wait for the debugger.** In Debug, the robot JVM pauses before running any
   student code until the debugger attaches, so breakpoints in the `Robot`
-  constructor and `robotInit` are hit. If nothing attaches within 30 s, the
-  run fails with a clear message.
-- **The debug toolbar's Stop stops the sim**, but only if that turns out easy
+  constructor and `robotInit` are hit. If nothing attaches within 120 s, the
+  run fails with a clear message. *(Amended after review: 30 s → 120 s,
+  because Java Debug won't attach until the editor's Java import finishes,
+  which can take over 40 s on a freshly opened project.)*
+- **Decided after review: the debug toolbar's Stop only disconnects.** The
+  stop-the-sim relay was dropped (it could race with Restart); students use
+  CodeRunner's Stop. Original requirement, kept for the record:
+  **the debug toolbar's Stop stops the sim**, but only if that turns out easy
   and reliable. **Fallback:** if it proves brittle during implementation, the
   Stop button just disconnects the debugger (VS Code's default for attached
   sessions), and the stop-the-sim code is dropped. The implementer makes this
@@ -108,8 +113,10 @@ the session looks the same to the student.
   - A non-zero exit or `BUILD FAILED` ends **failed**, as today.
 - Run and debug modes keep today's readiness detection (the NT4 log line). In
   debug mode, that line appears only after the debugger attaches and the JVM
-  resumes. The 30 s JDWP timeout sits well inside the existing
-  `simStartupTimeoutMs`.
+  resumes. *(Amended after review:)* in debug mode the build/startup
+  deadline is cancelled once the JVM prints its "Waiting…" line, so a
+  student paused at a breakpoint before the readiness line isn't failed.
+  The 120 s JDWP timeout covers the attach wait.
 - The route handler for `POST /api/sim/run` resolves the mode. It uses the
   explicit `mode` if given; for `restart`, the current (or most recent) run's mode; otherwise
   `"run"`.
@@ -126,9 +133,9 @@ the session looks the same to the student.
     descriptor or start a JVM.
   - **debug:** same Gradle phase as run. Before `exec`, it:
     1. appends
-       `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=30000`
+       `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000`
        to `java_args`;
-    2. prints `Waiting up to 30s for the editor's debugger to attach on port 5005…`;
+    2. prints `Waiting up to 120s for the editor's debugger to attach on port 5005…`;
     3. writes `$HOME/sim-debug.json` as `{"port":5005,"pid":<$$>}`. `$$`
        survives `exec`, so it is the robot JVM's pid and matches `sim.pid`.
   - The address is pinned to `127.0.0.1`. In network mode, workspaces share
@@ -205,8 +212,9 @@ A small TypeScript VS Code extension.
 
 | Situation | Behaviour |
 |---|---|
-| Editor not open / extension never attaches | The JVM exits after 30 s with a JDWP timeout error, and the run ends **failed**. The console shows the "Waiting up to 30s…" line before it. |
-| Two editor tabs | Only the claiming tab attaches; the other does nothing. |
+| Editor not open / extension never attaches | The JVM exits after 120 s with a JDWP timeout error, and the run ends **failed**. The console shows the "Waiting up to 120s…" line before it. |
+| Two editor tabs | Only the claiming tab attaches; the other does nothing. If the claiming tab is closed or reloaded during startup, no other tab retries and the run fails at the JDWP timeout (known limitation; click Debug again). |
+| Paused at a breakpoint before the readiness line | No deadline once the JVM is waiting for/attached to the debugger. |
 | CodeRunner Stop / Restart while debugging | The JVM is killed, the debug session ends, and the pid check prevents a second stop. |
 | Debugger paused at a breakpoint | The robot loop stops. Expect loop-overrun and watchdog warnings, which are normal for WPILib debugging. Native HALSim/NT4 keep running, so the DS and AdvantageScope stay connected, with values frozen. |
 | Build fails | Gradle output in the console; run ends **failed**. |
