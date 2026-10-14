@@ -159,6 +159,7 @@ export const simRunStatusSchema = z.enum([
 	"error",
 ]);
 export const simRunCommandSchema = z.enum(["start", "stop", "restart"]);
+export const simRunModeSchema = z.enum(["run", "debug", "build"]);
 export const dsModeSchema = z.enum(["auto", "teleop", "test"]);
 export const allianceStationSchema = z.enum([
 	"red1",
@@ -176,6 +177,7 @@ export const bridgeConnectionSchema = z.enum([
 
 export const simRunCommandRequestSchema = z.object({
 	action: simRunCommandSchema,
+	mode: simRunModeSchema.optional(),
 });
 
 export const driverStationPatchSchema = z
@@ -307,6 +309,7 @@ export type RunClientMessage = z.infer<typeof runClientMessageSchema>;
 export type RunServerMessage = z.infer<typeof runServerMessageSchema>;
 export type SimRunStatus = z.infer<typeof simRunStatusSchema>;
 export type SimRunCommand = z.infer<typeof simRunCommandSchema>;
+export type SimRunMode = z.infer<typeof simRunModeSchema>;
 export type DsMode = z.infer<typeof dsModeSchema>;
 export type AllianceStation = z.infer<typeof allianceStationSchema>;
 export type BridgeConnection = z.infer<typeof bridgeConnectionSchema>;

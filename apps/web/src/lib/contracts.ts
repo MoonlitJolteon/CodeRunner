@@ -21,6 +21,7 @@ export type {
 	PreviewDocumentsResponse,
 	RunServerMessage,
 	SessionResponse,
+	SimRunMode,
 	SimRunStatus,
 	SimStatusResponse,
 } from "@frc-coderunner/contracts";
