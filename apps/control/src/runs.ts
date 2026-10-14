@@ -4,6 +4,7 @@ import { appendFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type {
 	RunServerMessage,
+	SimRunMode,
 	SimRunStatus,
 	WorkspaceId,
 } from "@frc-coderunner/contracts";
@@ -24,6 +25,7 @@ export type RunCommandContext = {
 	workspace: WorkspaceRow;
 	runtime: WorkspaceRuntime;
 	runtimeProvider: WorkspaceRuntimeProvider;
+	mode: SimRunMode;
 	/** @deprecated Use runtime.runtimeName; retained for narrow test compatibility during the provider refactor. */
 	containerName: string;
 	/** @deprecated Runtime providers own command execution; retained for narrow test compatibility during the provider refactor. */
@@ -41,6 +43,7 @@ export type RunConnection = {
 type RunJob = {
 	id: string;
 	workspace: WorkspaceRow;
+	mode: SimRunMode;
 	state: "building" | "running" | "failed" | "stopped";
 	logPath: string;
 	clients: Set<RunConnection>;
@@ -76,11 +79,14 @@ function runLogPath(workspace: WorkspaceRow, runId: string): string {
 	);
 }
 
+/** Printed by run-sim.sh in debug mode right before exec'ing the robot JVM. */
+const DEBUG_WAITING_LINE = "for the editor's debugger to attach";
+
 function lineLooksReady(line: string): boolean {
 	return /\b(nt4|networktables)\b/i.test(line) || /listening.+5810/i.test(line);
 }
 
-function dockerRunScript(): string {
+export function dockerRunScript(mode: SimRunMode): string {
 	return [
 		"set -euo pipefail",
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, not JS template literal
@@ -89,7 +95,8 @@ function dockerRunScript(): string {
 		'pid_file="${SIM_PID_FILE:-$HOME/sim.pid}"',
 		"trap '/usr/local/bin/stop-sim.sh >/dev/null 2>&1 || true' TERM INT",
 		"/usr/local/bin/stop-sim.sh || true",
-		"/usr/local/bin/start-sim.sh",
+		// `mode` is a validated SimRunMode literal, safe to interpolate.
+		`SIM_MODE=${mode} /usr/local/bin/start-sim.sh`,
 		'pid="$(cat "$pid_file")"',
 		'tail --pid="$pid" -n +1 -F "$log_file"',
 		'if grep -q "BUILD FAILED" "$log_file" 2>/dev/null; then exit 1; fi',
@@ -102,7 +109,7 @@ export function defaultRunCommandFactory(
 	return context.runtimeProvider.execStream(context.workspace.id, [
 		"bash",
 		"-lc",
-		dockerRunScript(),
+		dockerRunScript(context.mode),
 	]);
 }
 
@@ -149,6 +156,7 @@ export class RunManager {
 	private readonly activeBuilds = new Set<string>();
 	private readonly jobsByWorkspace = new Map<WorkspaceId, RunJob>();
 	private readonly lastStatusByWorkspace = new Map<WorkspaceId, RunSnapshot>();
+	private readonly lastModeByWorkspace = new Map<WorkspaceId, SimRunMode>();
 	private readonly connectionsByWorkspace = new Map<
 		WorkspaceId,
 		Set<RunConnection>
@@ -208,6 +216,11 @@ export class RunManager {
 		return this.activeBuilds.size;
 	}
 
+	/** Mode of the current or most recent run, used by `restart` with no mode. */
+	lastMode(workspaceId: WorkspaceId): SimRunMode {
+		return this.lastModeByWorkspace.get(workspaceId) ?? "run";
+	}
+
 	reconcileOrphanedRuns(): number {
 		const orphaned = this.storage.listOrphanableRunJobs();
 		let reconciled = 0;
@@ -257,7 +270,11 @@ export class RunManager {
 		return { status: "idle", runId: null };
 	}
 
-	start(workspace: WorkspaceRow, connection?: RunConnection | null): string {
+	start(
+		workspace: WorkspaceRow,
+		connection?: RunConnection | null,
+		mode: SimRunMode = "run",
+	): string {
 		this.cancelWorkspace(workspace.id);
 
 		const runId = randomRunId();
@@ -267,6 +284,7 @@ export class RunManager {
 		const job: RunJob = {
 			id: runId,
 			workspace,
+			mode,
 			state: "building",
 			logPath,
 			clients: new Set(
@@ -294,12 +312,14 @@ export class RunManager {
 			logPath,
 		});
 		this.jobsByWorkspace.set(workspace.id, job);
+		this.lastModeByWorkspace.set(workspace.id, mode);
 		this.rememberStatus(job, "building");
 		this.activeBuilds.add(job.id);
 		job.buildSlotHeld = true;
 		log.info("run queued", {
 			workspaceId: workspace.id,
 			runId,
+			mode,
 			slug: workspace.slug,
 		});
 		void this.runJob(job);
@@ -379,6 +399,7 @@ export class RunManager {
 				workspace: job.workspace,
 				runtime,
 				runtimeProvider: this.runtimeProvider,
+				mode: job.mode,
 				containerName: runtime.runtimeName ?? "",
 				dockerPath: this.storage.config.dockerPath,
 			});
@@ -409,7 +430,9 @@ export class RunManager {
 				});
 				this.finishJob(job, "stopped", null, exit.signal);
 			} else if (exit.code === 0) {
-				const status = job.reportedRunning ? "stopped" : "failed";
+				// A build never reports running; a clean exit is its success.
+				const status =
+					job.reportedRunning || job.mode === "build" ? "stopped" : "failed";
 				log.info("run finished", {
 					workspaceId: job.workspace.id,
 					runId: job.id,
@@ -446,8 +469,10 @@ export class RunManager {
 
 	private armReadinessTimeout(job: RunJob): void {
 		const timeoutMs =
-			this.storage.config.runBuildTimeoutMs +
-			this.storage.config.simStartupTimeoutMs;
+			job.mode === "build"
+				? this.storage.config.runBuildTimeoutMs
+				: this.storage.config.runBuildTimeoutMs +
+					this.storage.config.simStartupTimeoutMs;
 		job.readinessTimer = setTimeout(() => {
 			void this.timeoutBeforeReadiness(job, timeoutMs);
 		}, timeoutMs);
@@ -470,7 +495,9 @@ export class RunManager {
 		await this.recordLog(
 			job,
 			"stderr",
-			`Run timed out before simulator readiness after ${Math.round(timeoutMs / 1000)} seconds.`,
+			job.mode === "build"
+				? `Build timed out after ${Math.round(timeoutMs / 1000)} seconds.`
+				: `Run timed out before simulator readiness after ${Math.round(timeoutMs / 1000)} seconds.`,
 		);
 		job.command?.kill("SIGTERM");
 		this.finishJob(job, "failed", null);
@@ -496,6 +523,18 @@ export class RunManager {
 		this.broadcast(job, { type: "log", stream, line });
 
 		if (
+			job.mode === "debug" &&
+			!job.finished &&
+			job.buildSlotHeld &&
+			line.includes(DEBUG_WAITING_LINE)
+		) {
+			// The build is done and the JVM is waiting for (or paused in) the
+			// debugger: no deadline from here on.
+			this.releaseBuildSlot(job);
+		}
+
+		if (
+			job.mode !== "build" &&
 			!job.finished &&
 			!job.canceled &&
 			!job.reportedRunning &&

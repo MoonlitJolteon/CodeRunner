@@ -381,7 +381,12 @@ export async function handleWorkspaceRoute(
 				halsim.disconnect(auth.workspace.id);
 				nt4Auto.disconnect(auth.workspace.id);
 				gamepad.reset(auth.workspace.id);
-				runId = runs.start(auth.workspace);
+				const mode =
+					parsed.mode ??
+					(parsed.action === "restart"
+						? runs.lastMode(auth.workspace.id)
+						: "run");
+				runId = runs.start(auth.workspace, null, mode);
 			}
 			const snapshot = runs.getWorkspaceSnapshot(auth.workspace.id);
 			const body: SimRunCommandResponse = {

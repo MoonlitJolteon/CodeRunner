@@ -194,6 +194,53 @@ describe("simulation HTTP API", () => {
 		);
 	});
 
+	test("HTTP run start honours mode, restart reuses it, and bad modes are rejected", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+		const modes: string[] = [];
+		const recordingFactory: RunCommandFactory = (context) => {
+			modes.push(context.mode);
+			return controlled.commandFactory(context);
+		};
+		await withApp(
+			async (app) => {
+				const cookie = cookieFrom(await login(app, "alice"));
+				const workspace = workspaceBySlug(app, "alice");
+				const post = (body: unknown) =>
+					app.fetch(
+						new Request("http://localhost/u/alice/api/sim/run", {
+							method: "POST",
+							headers: { cookie, "content-type": "application/json" },
+							body: JSON.stringify(body),
+						}),
+					);
+
+				expect((await post({ action: "start", mode: "debug" })).status).toBe(
+					202,
+				);
+				await waitFor(() => modes.length === 1);
+				expect((await post({ action: "restart" })).status).toBe(202);
+				await waitFor(() => modes.length === 2);
+				expect((await post({ action: "start" })).status).toBe(202);
+				await waitFor(() => modes.length === 3);
+				expect(modes).toEqual(["debug", "debug", "run"]);
+
+				expect((await post({ action: "start", mode: "profile" })).status).toBe(
+					400,
+				);
+				app.runs.stopWorkspace(workspace.id);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: recordingFactory,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 26090, end: 26099 },
+				vscodePortRange: { start: 33390, end: 33399 },
+				halsimPortRange: { start: 34390, end: 34399 },
+			},
+		);
+	});
+
 	test("Driver Station patch returns 409 when robot code is not running", async () => {
 		const fakeDocker = createFakeDocker();
 
