@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 import { SimControlsBlock } from "./SimControlsBlock";
 
@@ -90,5 +91,55 @@ describe("SimControlsBlock", () => {
 		fireEvent.click(screen.getByTestId("restart-button"));
 		expect(onStop).toHaveBeenCalledTimes(1);
 		expect(onRestart).toHaveBeenCalledTimes(1);
+	});
+
+	test("Start calls onStart with exactly 'run' (not the click event)", () => {
+		const onStart = vi.fn();
+		render(
+			<SimControlsBlock
+				runStatus="idle"
+				sessionReady={true}
+				onStart={onStart}
+				onStop={() => {}}
+				onRestart={() => {}}
+			/>,
+		);
+		fireEvent.click(screen.getByTestId("run-button"));
+		expect(onStart).toHaveBeenCalledTimes(1);
+		expect(onStart).toHaveBeenCalledWith("run");
+	});
+
+	test("the start menu offers Debug and Build", async () => {
+		const user = userEvent.setup();
+		const onStart = vi.fn();
+		render(
+			<SimControlsBlock
+				runStatus="idle"
+				sessionReady={true}
+				onStart={onStart}
+				onStop={() => {}}
+				onRestart={() => {}}
+			/>,
+		);
+		await user.click(screen.getByTestId("run-mode-menu"));
+		await user.click(await screen.findByRole("menuitem", { name: /Debug/ }));
+		expect(onStart).toHaveBeenLastCalledWith("debug");
+
+		await user.click(screen.getByTestId("run-mode-menu"));
+		await user.click(await screen.findByRole("menuitem", { name: /Build/ }));
+		expect(onStart).toHaveBeenLastCalledWith("build");
+	});
+
+	test("the start menu is disabled while a run is busy", () => {
+		render(
+			<SimControlsBlock
+				runStatus="running"
+				sessionReady={true}
+				onStart={() => {}}
+				onStop={() => {}}
+				onRestart={() => {}}
+			/>,
+		);
+		expect(screen.getByTestId("run-mode-menu")).toBeDisabled();
 	});
 });

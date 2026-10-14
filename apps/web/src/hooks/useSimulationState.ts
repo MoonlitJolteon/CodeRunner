@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
 	type DriverStationPatch,
+	type SimRunMode,
 	type SimRunStatus,
 	type SimStatusResponse,
 	simStatusResponseSchema,
@@ -13,7 +14,7 @@ interface UseSimulationStateReturn {
 	status: SimStatusResponse | null;
 	runStatus: SimRunStatus;
 	refresh: () => Promise<void>;
-	startRun: () => Promise<void>;
+	startRun: (mode?: SimRunMode) => Promise<void>;
 	stopRun: () => Promise<void>;
 	restartRun: () => Promise<void>;
 	setDriverStation: (patch: DriverStationPatch) => Promise<void>;
@@ -70,13 +71,13 @@ export function useSimulationState(
 	}, [refresh, workspaceSlug]);
 
 	const runCommand = useCallback(
-		async (action: SimRunAction) => {
+		async (action: SimRunAction, mode?: SimRunMode) => {
 			if (!workspaceSlug) return;
 			const response = await fetch(`/u/${workspaceSlug}/api/sim/run`, {
 				method: "POST",
 				credentials: "same-origin",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ action }),
+				body: JSON.stringify(mode ? { action, mode } : { action }),
 			});
 			if (!response.ok) {
 				toast.error(await readError(response, "Unable to update robot code."));
@@ -114,7 +115,7 @@ export function useSimulationState(
 		status,
 		runStatus: status?.run.status ?? "idle",
 		refresh,
-		startRun: () => runCommand("start"),
+		startRun: (mode?: SimRunMode) => runCommand("start", mode),
 		stopRun: () => runCommand("stop"),
 		restartRun: () => runCommand("restart"),
 		setDriverStation,

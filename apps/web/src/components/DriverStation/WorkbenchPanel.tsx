@@ -1,6 +1,7 @@
 import type { RunConnection } from "@/hooks/useRunChannel";
 import type {
 	DriverStationPatch,
+	SimRunMode,
 	SimRunStatus,
 	SimStatusResponse,
 } from "@/lib/contracts";
@@ -18,7 +19,7 @@ interface WorkbenchPanelProps {
 	runConnection: RunConnection;
 	inputMode: InputMode;
 	keyboardCaptureActive: boolean;
-	onStartRun: () => void;
+	onStartRun: (mode: SimRunMode) => void;
 	onStopRun: () => void;
 	onRestartRun: () => void;
 	onSetDriverStation: (patch: DriverStationPatch) => void;

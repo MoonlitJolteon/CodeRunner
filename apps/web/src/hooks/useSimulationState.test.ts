@@ -102,6 +102,28 @@ describe("useSimulationState", () => {
 		});
 	});
 
+	test("startRun sends the mode only when one is given; restartRun sends none", async () => {
+		const { result } = renderHook(() => useSimulationState("test-slug"));
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+
+		await act(async () => {
+			await result.current.startRun("debug");
+			await result.current.startRun();
+			await result.current.restartRun();
+		});
+
+		const bodies = (fetch as ReturnType<typeof vi.fn>).mock.calls
+			.filter((c: unknown[]) => c[0] === "/u/test-slug/api/sim/run")
+			.map((c: unknown[]) => JSON.parse((c[1] as RequestInit).body as string));
+		expect(bodies).toEqual([
+			{ action: "start", mode: "debug" },
+			{ action: "start" },
+			{ action: "restart" },
+		]);
+	});
+
 	test("error response shows toast", async () => {
 		const { toast } = await import("sonner");
 		vi.stubGlobal(
