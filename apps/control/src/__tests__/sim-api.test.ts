@@ -589,6 +589,67 @@ describe("simulation HTTP API", () => {
 		);
 	});
 
+	test("auto chooser bridge ignores NT4 text frames that are not message arrays", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+		const sockets: FakeWebSocket[] = [];
+
+		await withApp(
+			async (app) => {
+				const loginResponse = await login(app, "alice");
+				const cookie = cookieFrom(loginResponse);
+				const workspace = workspaceBySlug(app, "alice");
+				app.runs.start(workspace);
+				await waitFor(() => controlled.commands.length === 1);
+				controlled.commands[0]?.writeStdout("NT4 listening on 5810");
+				await waitFor(
+					() =>
+						app.runs.getWorkspaceSnapshot(workspace.id).status === "running",
+				);
+
+				const response = await app.fetch(
+					new Request("http://localhost/u/alice/api/sim/auto-choosers", {
+						headers: { cookie },
+					}),
+				);
+				await waitFor(
+					() =>
+						sockets.length === 1 && sockets[0]?.readyState === WebSocket.OPEN,
+				);
+				const refreshed = await app.fetch(
+					new Request("http://localhost/u/alice/api/sim/auto-choosers", {
+						headers: { cookie },
+					}),
+				);
+
+				expect(response.status).toBe(200);
+				expect(refreshed.status).toBe(200);
+				expect(await refreshed.json()).toMatchObject({
+					ok: true,
+					nt4: { connected: true },
+				});
+				app.runs.stopWorkspace(workspace.id);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				nt4AutoWebSocketFactory: () => {
+					const socket = new FakeWebSocket();
+					sockets.push(socket);
+					queueMicrotask(() => {
+						socket.open();
+						socket.message({});
+					});
+					return socket as unknown as WebSocket;
+				},
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 26100, end: 26109 },
+				vscodePortRange: { start: 33400, end: 33409 },
+				halsimPortRange: { start: 34400, end: 34409 },
+			},
+		);
+	});
+
 	test("auto chooser bridge republishes selected topic after NT4 reconnect", async () => {
 		const fakeDocker = createFakeDocker();
 		const controlled = createControlledRunCommands();

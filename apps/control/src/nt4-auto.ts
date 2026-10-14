@@ -518,6 +518,9 @@ export class Nt4AutoChooserBridge extends ReconnectingWsBridge<
 				method: string;
 				params: Record<string, unknown>;
 			}>;
+			// NT4 text frames are JSON arrays; ignore anything else rather than
+			// throwing out of the socket handler.
+			if (!Array.isArray(messages)) return;
 			for (const message of messages) {
 				if (message.method === "announce") {
 					const id = message.params.id;
