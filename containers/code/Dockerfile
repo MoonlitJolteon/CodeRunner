@@ -21,6 +21,17 @@ RUN apt-get update -qq \
     && npm version "${SPOTLESS_GRADLE_VERSION}" --no-git-tag-version --allow-same-version \
     && npx vsce package --no-dependencies --out /tmp/vscode-spotless-gradle.vsix
 
+# CodeRunner's own editor extension: attaches the Java debugger to Debug runs.
+# See docs/decisions/045-sim-debugging.md.
+FROM node:22-bookworm-slim AS coderunner-debug-builder
+
+COPY containers/code/coderunner-debug/ /src/
+WORKDIR /src
+RUN npx --yes esbuild@0.24.2 src/extension.ts --bundle --platform=node --format=cjs \
+       --external:vscode --tsconfig-raw={} --outfile=dist/extension.js \
+    && npx --yes @vscode/vsce@3.2.1 package --no-dependencies --skip-license \
+       --allow-missing-repository --out /tmp/coderunner-debug.vsix
+
 # V2 merged code container
 # Layers JDK 17/21 + Gradle/WPILib cache + FRC extensions on linuxserver/vscodium-web
 # Base already provides: codium-server (VSCodium reh-web), s6-overlay, abc user,
@@ -116,6 +127,7 @@ ARG GRADLE_VERSION=3.18.0
 ARG JAVA_DEPS_VERSION=0.27.6
 ARG JAVA_PACK_VERSION=0.31.1
 ARG SPOTLESS_GRADLE_VERSION
+ARG CODERUNNER_DEBUG_VERSION=0.1.0
 
 # Download pinned Open VSX and GitHub Release artifacts. Spotless is copied
 # from the pinned-source builder above.
@@ -138,6 +150,7 @@ RUN mkdir -p /tmp/exts \
        -O /tmp/exts/vscode-java-pack.vsix
 
 COPY --from=spotless-builder /tmp/vscode-spotless-gradle.vsix /tmp/exts/vscode-spotless-gradle.vsix
+COPY --from=coderunner-debug-builder /tmp/coderunner-debug.vsix /tmp/exts/coderunner-debug.vsix
 
 # Do not resolve extension packs or dependencies from the gallery; every required
 # Java extension is installed explicitly below.
@@ -153,9 +166,10 @@ RUN mkdir -p /opt/frc-extensions-cache \
                      --install-extension /tmp/exts/vscode-java-dependency.vsix \
                      --install-extension /tmp/exts/vscode-java-pack.vsix \
                      --install-extension /tmp/exts/vscode-spotless-gradle.vsix \
+                     --install-extension /tmp/exts/coderunner-debug.vsix \
                      --extensions-dir /opt/frc-extensions-cache \
     && jq -e \
-       --argjson expected '["redhat.java@'"${REDHAT_JAVA_VERSION}"'","wpilibsuite.vscode-wpilib@'"${WPILIB_EXT_VERSION}"'","vscjava.vscode-java-debug@'"${JAVA_DEBUG_VERSION}"'","vscjava.vscode-java-test@'"${JAVA_TEST_VERSION}"'","vscjava.vscode-maven@'"${MAVEN_VERSION}"'","vscjava.vscode-gradle@'"${GRADLE_VERSION}"'","vscjava.vscode-java-dependency@'"${JAVA_DEPS_VERSION}"'","vscjava.vscode-java-pack@'"${JAVA_PACK_VERSION}"'","richardwillis.vscode-spotless-gradle@'"${SPOTLESS_GRADLE_VERSION}"'"]' \
+       --argjson expected '["redhat.java@'"${REDHAT_JAVA_VERSION}"'","wpilibsuite.vscode-wpilib@'"${WPILIB_EXT_VERSION}"'","vscjava.vscode-java-debug@'"${JAVA_DEBUG_VERSION}"'","vscjava.vscode-java-test@'"${JAVA_TEST_VERSION}"'","vscjava.vscode-maven@'"${MAVEN_VERSION}"'","vscjava.vscode-gradle@'"${GRADLE_VERSION}"'","vscjava.vscode-java-dependency@'"${JAVA_DEPS_VERSION}"'","vscjava.vscode-java-pack@'"${JAVA_PACK_VERSION}"'","richardwillis.vscode-spotless-gradle@'"${SPOTLESS_GRADLE_VERSION}"'","coderunner.coderunner-debug@'"${CODERUNNER_DEBUG_VERSION}"'"]' \
        'length == ($expected | length) and all(.[]; .metadata.source == "vsix" and .metadata.pinned == true) and ([.[] | "\(.identifier.id)@\(.version)"] | sort) == ($expected | sort)' \
        /opt/frc-extensions-cache/extensions.json > /dev/null \
     && rm -rf /tmp/exts
