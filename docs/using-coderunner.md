@@ -62,8 +62,8 @@ Click the **▾** beside **Start** for two more options:
   values freeze. **Disconnect** on the debug toolbar detaches the debugger
   and leaves the simulation running; use **Stop** in the Driver Station to
   end it. Keep the editor open: if nothing connects within 2 minutes (for
-  example, the editor tab was closed or reloaded while the robot was
-  starting), the run fails and you can click **Debug** again.
+  example, an editor tab was closed, reloaded or crashed around that time),
+  the run fails and you can click **Debug** again.
 - **Build** compiles your project and runs its tests (`./gradlew build`)
   without starting the simulation. The output appears in the **Console** tab.
 

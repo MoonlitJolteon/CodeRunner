@@ -213,7 +213,7 @@ A small TypeScript VS Code extension.
 | Situation | Behaviour |
 |---|---|
 | Editor not open / extension never attaches | The JVM exits after 120 s with a JDWP timeout error, and the run ends **failed**. The console shows the "Waiting up to 120s…" line before it. |
-| Two editor tabs | Only the claiming tab attaches; the other does nothing. If the claiming tab is closed or reloaded during startup, no other tab retries and the run fails at the JDWP timeout (known limitation; click Debug again). |
+| Two editor tabs | Only the claiming tab attaches; the other does nothing. If the claiming tab is closed or reloaded during startup, or a crashed tab's lingering extension host wins the claim, no other tab retries and the run fails at the JDWP timeout (known limitation; click Debug again). |
 | Paused at a breakpoint before the readiness line | No deadline once the JVM is waiting for/attached to the debugger. |
 | CodeRunner Stop / Restart while debugging | The JVM is killed, the debug session ends, and the pid check prevents a second stop. |
 | Debugger paused at a breakpoint | The robot loop stops. Expect loop-overrun and watchdog warnings, which are normal for WPILib debugging. Native HALSim/NT4 keep running, so the DS and AdvantageScope stay connected, with values frozen. |

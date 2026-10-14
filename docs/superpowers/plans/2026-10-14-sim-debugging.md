@@ -1686,6 +1686,8 @@ Run the real app (`bun run dev:control` + `bun run dev:web` with the locally bui
 - [ ] **Build** on a clean project ends stopped with `BUILD SUCCESSFUL`. Introduce a compile error, and **Build** ends failed.
 - [ ] **Stop** during a **Build** ends the Gradle process.
 - [ ] Plain **Start** behaves exactly as before.
+- [ ] *(Final review #2)* Reload the editor tab (or kill the browser), reopen, and click **Debug** 3–4 times within a few minutes: every run attaches. If not, check `ps` in the workspace for extra extension-host processes.
+- [ ] *(Final review #5)* These checks run through the real control plane, so the sim runs as **root** as in production (the smoke runs it as `abc`).
 
 - [ ] **Step 4: Commit**
 

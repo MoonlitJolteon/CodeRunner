@@ -45,9 +45,15 @@ was designed and then dropped after review. The sim runs as root
 root-side relay, which could race with Restart and kill the new run. Students
 stop the sim with CodeRunner's Stop.
 
-**Known limitation.** The attach claim belongs to whichever editor tab took
-it. If that tab is closed or reloaded during startup, no other tab retries,
-and the run fails at the JDWP timeout; clicking Debug again works.
+**Known limitation.** The attach claim belongs to whichever extension host
+takes it first, and losing hosts don't retry. If the claiming tab is closed
+or reloaded during startup, the run fails at the JDWP timeout. An editor tab
+that went away uncleanly (browser crash, discarded tab) can also leave its
+extension host running for codium-server's reconnection grace period; if
+that host wins the claim, its attach never reaches a window and the run
+fails the same way. Clicking Debug again retries the race. If this shows up
+in practice, the fix is to time-box the claimer and let losing hosts keep
+polling (or shorten `--reconnection-grace-time`).
 
 **Build** runs `./gradlew build` (what WPILib's *Build Robot Code* runs, tests
 included). It skips readiness detection, so Gradle output mentioning
