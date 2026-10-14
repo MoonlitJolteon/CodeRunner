@@ -4,6 +4,8 @@ set -euo pipefail
 HOME="${HOME:-/config}"
 pid_file="${SIM_PID_FILE:-$HOME/sim.pid}"
 project_root="${SIM_PROJECT_ROOT:-/workspace/project}"
+# run-sim.sh's Gradle (incl. Build mode) is identified by this workspace's cache dir.
+sim_cache_dir="${GRADLE_PROJECT_CACHE_DIR:-$HOME/.gradle-project-sim}"
 
 # Debug-run handshake files (see run-sim.sh and the coderunner-debug extension).
 clear_sim_files() {
@@ -79,7 +81,7 @@ sim_candidate_pids() {
     [[ -n "${pid:-}" && -n "${args:-}" ]] || continue
     [[ "$pid" != "$$" && "$pid" != "$BASHPID" ]] || continue
     case "$args" in
-      *"org.gradle.wrapper.GradleWrapperMain"*simulate*|*"org.gradle.wrapper.GradleWrapperMain"*".gradle-project-sim"*|*"$project_root/build/libs/"*.jar*)
+      *"org.gradle.wrapper.GradleWrapperMain"*simulate*|*"org.gradle.wrapper.GradleWrapperMain"*"--project-cache-dir $sim_cache_dir "*|*"$project_root/build/libs/"*.jar*)
         echo "$pid"
         ;;
     esac

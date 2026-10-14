@@ -368,6 +368,45 @@ describe("sim container scripts", () => {
 		}
 	});
 
+	test("stop-sim leaves Build-style gradle processes from other cache dirs alone", async () => {
+		const root = await mkdtemp(join(tmpdir(), "frc-sim-foreign-gradle-"));
+		const home = join(root, "home");
+		await mkdir(home, { recursive: true });
+		// Same shape as run-sim's Build invocation, but not this workspace's cache dir
+		// (e.g. a developer's own process on the host running these tests).
+		const fakeArgs = `java -cp gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain --no-daemon --project-cache-dir ${root}/elsewhere/.gradle-project-sim build`;
+		const sleeper = Bun.spawn(
+			["bash", "-lc", 'exec -a "$FAKE_ARGS" sleep 60'],
+			{
+				env: { ...Bun.env, FAKE_ARGS: fakeArgs },
+				stdin: "ignore",
+				stdout: "ignore",
+				stderr: "ignore",
+			},
+		);
+		try {
+			await waitFor(() =>
+				processArgs(sleeper.pid).includes("GradleWrapperMain"),
+			);
+			const stop = Bun.spawn(["bash", join(import.meta.dir, "stop-sim.sh")], {
+				env: {
+					...Bun.env,
+					HOME: home,
+					SIM_PID_FILE: join(home, "sim.pid"),
+					SIM_PROJECT_ROOT: join(root, "project"),
+				},
+				stdin: "ignore",
+				stdout: "ignore",
+				stderr: "ignore",
+			});
+			expect(await stop.exited).toBe(0);
+			expect(processArgs(sleeper.pid)).toContain("GradleWrapperMain");
+		} finally {
+			sleeper.kill("SIGKILL");
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	test("stop-sim cleans an orphaned Build gradle process without a pid file", async () => {
 		const root = await mkdtemp(join(tmpdir(), "frc-sim-build-orphan-"));
 		const home = join(root, "home");
