@@ -1,5 +1,5 @@
 /**
- * The Start split button's menu sends the chosen run mode to the control plane.
+ * The Start split button's menu picks the run mode; clicking Start sends it.
  */
 import { expect, test } from "../../fixtures/app";
 import { loginAs } from "../../fixtures/auth";
@@ -10,7 +10,7 @@ import {
 import { WorkspacePage } from "../../page-objects/workspace.po";
 
 for (const mode of ["Debug", "Build"] as const) {
-	test(`Start menu → ${mode} posts mode ${mode.toLowerCase()}`, async ({
+	test(`Start menu → ${mode}, then Start, posts mode ${mode.toLowerCase()}`, async ({
 		page,
 		app,
 		runtime,
@@ -36,7 +36,9 @@ for (const mode of ["Debug", "Build"] as const) {
 			(r) => r.url().endsWith("/api/sim/run") && r.method() === "POST",
 		);
 		await page.getByTestId("run-mode-menu").click();
-		await page.getByRole("menuitem", { name: mode }).click();
+		await page.getByRole("menuitemradio", { name: mode }).click();
+		await expect(page.getByTestId("run-button")).toHaveText(mode);
+		await page.getByTestId("run-button").click();
 		expect((await request).postDataJSON()).toEqual({
 			action: "start",
 			mode: mode.toLowerCase(),

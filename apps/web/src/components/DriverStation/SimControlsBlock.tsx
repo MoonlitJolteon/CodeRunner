@@ -6,11 +6,13 @@ import {
 	RotateCcw,
 	Square,
 } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
-	DropdownMenuItem,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { SimRunMode, SimRunStatus } from "@/lib/contracts";
@@ -22,6 +24,16 @@ interface SimControlsBlockProps {
 	onStart: (mode: SimRunMode) => void;
 	onStop: () => void;
 	onRestart: () => void;
+}
+
+const RUN_MODES: Record<SimRunMode, { label: string; Icon: typeof Play }> = {
+	run: { label: "Start", Icon: Play },
+	debug: { label: "Debug", Icon: Bug },
+	build: { label: "Build", Icon: Hammer },
+};
+
+function isSimRunMode(value: unknown): value is SimRunMode {
+	return typeof value === "string" && value in RUN_MODES;
 }
 
 interface SimButtonProps {
@@ -78,6 +90,8 @@ export function SimControlsBlock({
 	const runBusy = ["building", "running", "stopping"].includes(runStatus);
 	const canRestart = runStatus === "running";
 	const startDisabled = runBusy || !sessionReady;
+	// The menu picks what the Start button does; clicking the button runs it.
+	const [mode, setMode] = useState<SimRunMode>("run");
 
 	return (
 		<div className="flex h-full min-h-0 flex-col gap-1.5 overflow-hidden rounded-lg border border-border bg-card p-1.5">
@@ -85,11 +99,11 @@ export function SimControlsBlock({
 				Sim Controls
 			</span>
 			<div className="flex min-h-0 flex-1 items-stretch gap-1.5">
-				<div className="flex min-h-0 flex-1 items-stretch">
+				<div className="flex min-h-0 flex-[1.4] items-stretch">
 					<SimButton
-						label="Start"
-						Icon={Play}
-						onClick={() => onStart("run")}
+						label={RUN_MODES[mode].label}
+						Icon={RUN_MODES[mode].Icon}
+						onClick={() => onStart(mode)}
 						disabled={startDisabled}
 						tone="start"
 						testId="run-button"
@@ -102,7 +116,7 @@ export function SimControlsBlock({
 								<Button
 									type="button"
 									variant="outline"
-									aria-label="More ways to start"
+									aria-label="Choose what Start does"
 									data-testid="run-mode-menu"
 									className="h-full min-h-0 rounded-l-none border-l-0 border-border bg-card/40 px-1 text-emerald-300 hover:bg-white/[0.05] disabled:opacity-40"
 								/>
@@ -111,14 +125,22 @@ export function SimControlsBlock({
 							<ChevronDown className="size-3.5" />
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end" className="min-w-40">
-							<DropdownMenuItem onClick={() => onStart("debug")}>
-								<Bug />
-								Debug
-							</DropdownMenuItem>
-							<DropdownMenuItem onClick={() => onStart("build")}>
-								<Hammer />
-								Build
-							</DropdownMenuItem>
+							<DropdownMenuRadioGroup
+								value={mode}
+								onValueChange={(value) => {
+									if (isSimRunMode(value)) setMode(value);
+								}}
+							>
+								{(Object.keys(RUN_MODES) as SimRunMode[]).map((key) => {
+									const { label, Icon } = RUN_MODES[key];
+									return (
+										<DropdownMenuRadioItem key={key} value={key} closeOnClick>
+											<Icon />
+											{label}
+										</DropdownMenuRadioItem>
+									);
+								})}
+							</DropdownMenuRadioGroup>
 						</DropdownMenuContent>
 					</DropdownMenu>
 				</div>

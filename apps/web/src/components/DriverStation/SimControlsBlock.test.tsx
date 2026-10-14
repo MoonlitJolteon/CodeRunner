@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 import { SimControlsBlock } from "./SimControlsBlock";
@@ -109,7 +109,7 @@ describe("SimControlsBlock", () => {
 		expect(onStart).toHaveBeenCalledWith("run");
 	});
 
-	test("the start menu offers Debug and Build", async () => {
+	test("picking a mode only changes the Start button; clicking it runs that mode", async () => {
 		const user = userEvent.setup();
 		const onStart = vi.fn();
 		render(
@@ -121,13 +121,35 @@ describe("SimControlsBlock", () => {
 				onRestart={() => {}}
 			/>,
 		);
+		const runButton = screen.getByTestId("run-button");
+
 		await user.click(screen.getByTestId("run-mode-menu"));
-		await user.click(await screen.findByRole("menuitem", { name: /Debug/ }));
+		await user.click(
+			await screen.findByRole("menuitemradio", { name: /Debug/ }),
+		);
+		// Picking a mode closes the menu so Start is clickable straight away.
+		await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+		expect(onStart).not.toHaveBeenCalled();
+		expect(runButton).toHaveTextContent("Debug");
+		await user.click(runButton);
 		expect(onStart).toHaveBeenLastCalledWith("debug");
 
 		await user.click(screen.getByTestId("run-mode-menu"));
-		await user.click(await screen.findByRole("menuitem", { name: /Build/ }));
+		await user.click(
+			await screen.findByRole("menuitemradio", { name: /Build/ }),
+		);
+		expect(runButton).toHaveTextContent("Build");
+		await user.click(runButton);
 		expect(onStart).toHaveBeenLastCalledWith("build");
+
+		await user.click(screen.getByTestId("run-mode-menu"));
+		await user.click(
+			await screen.findByRole("menuitemradio", { name: /Start/ }),
+		);
+		expect(runButton).toHaveTextContent("Start");
+		await user.click(runButton);
+		expect(onStart).toHaveBeenLastCalledWith("run");
+		expect(onStart).toHaveBeenCalledTimes(3);
 	});
 
 	test("the start menu is disabled while a run is busy", () => {
