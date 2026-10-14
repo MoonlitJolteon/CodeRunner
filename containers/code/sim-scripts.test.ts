@@ -278,7 +278,7 @@ describe("sim container scripts", () => {
 				await readFile(join(fixture.root, "java.args"), "utf8")
 			).split("\n");
 			const agent =
-				"-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000";
+				"-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000,quiet=y";
 			expect(javaArgs).toContain(agent);
 			expect(javaArgs.indexOf(agent)).toBeLessThan(javaArgs.indexOf("-jar"));
 			const javaPid = Number(

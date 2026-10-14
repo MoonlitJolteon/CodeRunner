@@ -118,8 +118,11 @@ fi
 
 if [[ "$sim_mode" == "debug" ]]; then
   # Loopback only: in network mode workspaces share a Docker network, and an
-  # attached debugger can run arbitrary code in this JVM.
-  java_args+=("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debug_port},timeout=120000")
+  # attached debugger can run arbitrary code in this JVM. quiet=y: the agent's
+  # "Listening for transport" banner goes through C stdio, and wpiutil's fmt
+  # then aborts ("negative value") writing to the same piped stdout while
+  # loading HAL extensions.
+  java_args+=("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debug_port},timeout=120000,quiet=y")
   echo "Waiting up to 120s for the editor's debugger to attach on port ${debug_port}..."
   # $$ survives exec, so this is the robot JVM's pid (and sim.pid's).
   printf '{"port":%s,"pid":%s}\n' "$debug_port" "$$" >"$debug_marker"

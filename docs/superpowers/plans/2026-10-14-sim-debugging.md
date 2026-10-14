@@ -16,7 +16,7 @@
 
 ## Global Constraints
 
-- JDWP agent string, verbatim: `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000`. Never bind `0.0.0.0` or a bare port.
+- JDWP agent string, verbatim: `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000,quiet=y`. Never bind `0.0.0.0` or a bare port.
 - Start (`mode: "run"`) must produce exactly today's Gradle task (`simulateExternalJavaRelease`) and the same robot JVM args (no agent, no marker file).
 - No changes to student project files (`.vscode/launch.json`, `build.gradle`, …).
 - Debug session name, verbatim: `Debug Simulation`.
@@ -1757,7 +1757,7 @@ travels as `mode` on `POST /api/sim/run` → `RunManager` → `SIM_MODE` →
 under the debugger. That would run a second, unmanaged sim beside ours: it
 needs the Sim GUI (X11) and competes for port 3300. CodeRunner keeps owning
 the JVM (decision 025), and in debug mode adds
-`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000`.
+`-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000,quiet=y`.
 
 - **Loopback only.** In network mode, workspaces share a Docker network. A
   JDWP port on `0.0.0.0` would let one student run code in another's JVM.

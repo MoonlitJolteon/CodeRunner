@@ -133,7 +133,7 @@ the session looks the same to the student.
     descriptor or start a JVM.
   - **debug:** same Gradle phase as run. Before `exec`, it:
     1. appends
-       `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000`
+       `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:5005,timeout=120000,quiet=y`
        to `java_args`;
     2. prints `Waiting up to 120s for the editor's debugger to attach on port 5005…`;
     3. writes `$HOME/sim-debug.json` as `{"port":5005,"pid":<$$>}`. `$$`
