@@ -23,11 +23,11 @@ commit and push any work you want to keep.
 
 :::important[Start the simulation from CodeRunner]
 
-The WPILib extension can start a simulation, but you should not use it here.
-Click **Start** in the Driver Station at the bottom of the page so CodeRunner
-can use its supported headless simulation setup and connect the controls and
-telemetry. Standalone builds can still be run from the extension when you only
-want to compile and check your code.
+The WPILib extension can start or debug a simulation, but you should not use
+it here. Click **Start** in the Driver Station at the bottom of the page so
+CodeRunner can use its supported headless simulation setup and connect the
+controls and telemetry. To debug, use **Start ▾ → Debug** instead of WPILib's
+*Simulate Robot Code* or *Debug Robot Code*.
 
 :::
 
@@ -48,6 +48,24 @@ reload any of them.
 
 Drag the dividers to resize panes. Use the caret buttons or **User menu → Layout**
 to change the layout.
+
+### Debugging and building
+
+Click the **▾** beside **Start** for two more options:
+
+- **Debug** starts the simulation with the debugger connected. Set
+  breakpoints in the editor first. The robot waits up to 2 minutes for the
+  editor's debugger, which connects by itself, so breakpoints in your `Robot`
+  constructor and `robotInit` are hit. Use the debug toolbar to step,
+  continue and inspect variables. While your code is paused, the robot stops
+  running its loop (expect loop-overrun warnings), and AdvantageScope's
+  values freeze. **Disconnect** on the debug toolbar detaches the debugger
+  and leaves the simulation running; use **Stop** in the Driver Station to
+  end it. Keep the editor open: if nothing connects within 2 minutes (for
+  example, the editor tab was closed or reloaded while the robot was
+  starting), the run fails and you can click **Debug** again.
+- **Build** compiles your project and runs its tests (`./gradlew build`)
+  without starting the simulation. The output appears in the **Console** tab.
 
 ## PathPlanner
 
