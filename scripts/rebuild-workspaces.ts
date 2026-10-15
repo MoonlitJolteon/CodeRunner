@@ -59,8 +59,8 @@ function parseContainerNames(stdout: string): string[] {
 function clearContainerLeases(dbPath: string): number {
 	const db = new Database(dbPath);
 	try {
-		// The deploy flow runs this right after `compose up`, while the control
-		// plane is mid-boot and writing to the same database. Without a busy
+		// This can run right after `compose up`, while the control plane is
+		// mid-boot and writing to the same database. Without a busy
 		// timeout SQLite fails immediately with "database is locked" instead of
 		// waiting out those transient writes.
 		db.exec("PRAGMA busy_timeout = 10000;");

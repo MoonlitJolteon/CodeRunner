@@ -10,8 +10,8 @@ own; `coderunner rebuild-workspaces` is no longer an update step, and the
 Deploy workflow no longer runs it.
 
 **The image ID is pinned per process.** The control plane resolves the code
-image tag (`docker image inspect`) the first time it needs it and keeps that
-ID until it exits. Containers are created with `docker run <that ID>`, not the
+image tag (`docker image inspect`) at boot and keeps that ID until it exits.
+If the image is missing at boot, the first successful lookup pins it. Containers are created with `docker run <that ID>`, not the
 tag. This rests on one assumption: **control and workspace images always
 update together.** `release.yml` publishes both for every tag and stamps
 `org.opencontainers.image.version` on each, so every release changes both
@@ -32,12 +32,10 @@ label always names the image the container was started from.
 
 **Labelled, not read from `.Image`.** Each container is created with
 `frc-sim.image-id=<ID>`, the same `docker image inspect` value it is later
-compared against. With the containerd image store, a container's `.Image`
-need not have the same form as the image's `.Id`; a mismatch there would
-recreate the container on every request. Containers created before this
-change have no label and fall back to `.Image`, so at worst they are
-recycled once and come back labelled. A container reporting neither stays
-adoptable, as does any container while the image is missing.
+compared against, so the check never depends on how the image store
+(e.g. containerd) formats a container's `.Image`. A container without the
+label predates this change and is recycled once. Any container stays
+adoptable while the image is missing.
 
 ## Consequences
 
@@ -45,8 +43,9 @@ adoptable, as does any container while the image is missing.
   recycled the next time it is seen. The restart has already dropped every
   proxied session, so no extra disconnect is visible. Update between classes.
 - A workspace image rebuilt or pulled without restarting the control plane is
-  not used, not even by `rebuild-workspaces`. In local development, restart
-  `bun run dev:control` after `bun run docker:build:workspace`.
+  not used, not even by `rebuild-workspaces`. After `bun run
+  docker:build:workspace`, restart `bun run dev:control` or
+  `docker compose restart control`.
 - If the release process ever stops changing the workspace image ID with
   every release, a release that changes only control-plane `docker run`
   arguments will not recycle workspaces. Revisit this decision before making

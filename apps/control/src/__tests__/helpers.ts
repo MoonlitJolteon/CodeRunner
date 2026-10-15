@@ -265,7 +265,6 @@ export function dockerInspect(container: FakeContainer): unknown {
 			Labels: container.labels,
 		},
 		Mounts: container.mounts,
-		Image: container.image,
 		NetworkSettings: {
 			Ports: portsMap,
 			Networks: networks,
@@ -319,7 +318,7 @@ export function createFakeDocker(
 		calls.push([...args]);
 
 		if (args[0] === "image" && args[1] === "inspect") {
-			return ok(JSON.stringify([{ Id: image.id }]));
+			return ok(`${image.id}\n`);
 		}
 
 		if (args[0] === "container" && args[1] === "inspect") {

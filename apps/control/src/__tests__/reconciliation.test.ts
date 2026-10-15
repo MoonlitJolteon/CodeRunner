@@ -161,6 +161,7 @@ describe("container reconciliation", () => {
 						"frc-sim.version": "v2",
 						"frc-sim.role": "code",
 						"frc-sim.workspace": workspace.id,
+						"frc-sim.image-id": "fake-image",
 					},
 					ports: [
 						{ hostPort: 25834, containerPort: 5810, hostIp: "127.0.0.1" },
@@ -197,7 +198,7 @@ describe("container reconciliation", () => {
 					const workspace = workspaceBySlug(app, "alice");
 					const name = codeContainerName(workspace.id);
 
-					// Otherwise adoptable, but created before the image was updated.
+					// Otherwise adoptable, but created before image ID labels existed.
 					fakeDocker.containers.set(name, {
 						name,
 						running,
@@ -212,7 +213,6 @@ describe("container reconciliation", () => {
 							{ hostPort: 33060, containerPort: 3000, hostIp: "127.0.0.1" },
 							{ hostPort: 34060, containerPort: 3300, hostIp: "127.0.0.1" },
 						],
-						image: "sha256:older",
 					});
 
 					const status = await app.containers.ensureCodeContainer(workspace);
@@ -239,50 +239,6 @@ describe("container reconciliation", () => {
 			);
 		});
 	}
-
-	test("adoption trusts the image ID label over the container's Image field", async () => {
-		const fakeDocker = createFakeDocker();
-
-		await withApp(
-			async (app) => {
-				await login(app, "alice");
-				const workspace = workspaceBySlug(app, "alice");
-				const name = codeContainerName(workspace.id);
-
-				// An image store that reports container images in another form
-				// must not make every adoption look stale.
-				fakeDocker.containers.set(name, {
-					name,
-					running: true,
-					labels: {
-						"frc-sim.managed": "true",
-						"frc-sim.version": "v2",
-						"frc-sim.role": "code",
-						"frc-sim.workspace": workspace.id,
-						"frc-sim.image-id": "fake-image",
-					},
-					ports: [
-						{ hostPort: 25844, containerPort: 5810, hostIp: "127.0.0.1" },
-						{ hostPort: 33064, containerPort: 3000, hostIp: "127.0.0.1" },
-						{ hostPort: 34064, containerPort: 3300, hostIp: "127.0.0.1" },
-					],
-					image: "sha256:other-format",
-				});
-
-				const status = await app.containers.ensureCodeContainer(workspace);
-				expect(status.state).toBe("running");
-				expect(fakeDocker.calls).not.toContainEqual(["rm", "-f", name]);
-				expect(fakeDocker.calls.some((call) => call[0] === "run")).toBe(false);
-			},
-			{
-				dockerRunner: fakeDocker.runner,
-				codeImage: "coderunner-workspace:test",
-				simPortRange: { start: 25844, end: 25845 },
-				vscodePortRange: { start: 33064, end: 33065 },
-				halsimPortRange: { start: 34064, end: 34065 },
-			},
-		);
-	});
 
 	test("a pull recycles running containers only after a control-plane restart", async () => {
 		const fakeDocker = createFakeDocker();
@@ -329,6 +285,30 @@ describe("container reconciliation", () => {
 				simPortRange: { start: 25842, end: 25843 },
 				vscodePortRange: { start: 33062, end: 33063 },
 				halsimPortRange: { start: 34062, end: 34063 },
+			},
+		);
+	});
+
+	test("the image ID is pinned at boot, before a pull", async () => {
+		const fakeDocker = createFakeDocker();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+
+				// Pulled before anything needed a workspace container.
+				fakeDocker.image.id = "sha256:pulled";
+				await app.containers.ensureCodeContainer(workspace);
+				const runCall = fakeDocker.calls.find((call) => call[0] === "run");
+				expect(runCall?.at(-1)).toBe("fake-image");
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25844, end: 25845 },
+				vscodePortRange: { start: 33064, end: 33065 },
+				halsimPortRange: { start: 34064, end: 34065 },
 			},
 		);
 	});

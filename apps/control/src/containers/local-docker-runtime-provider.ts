@@ -406,6 +406,15 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		return imageId;
 	}
 
+	/** Pins the code image ID at boot, before any `docker compose pull`. */
+	pinCodeImageId(): void {
+		void this.currentCodeImageId().catch((err: unknown) => {
+			log.warn("code image ID not pinned at boot", {
+				err: err instanceof Error ? err : new Error(String(err)),
+			});
+		});
+	}
+
 	/**
 	 * The code image tag's ID, pinned on first resolution so a later
 	 * `docker compose pull` changes nothing until the control plane restarts.
@@ -417,16 +426,14 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			return this.codeImageId;
 		}
 		const image = this.storage.config.codeImage;
-		const result = await this.runDocker(["image", "inspect", image], true);
-		if (result.exitCode !== 0) return null;
-		try {
-			const [entry] = JSON.parse(result.stdout) as Array<{ Id?: string }>;
-			if (!entry?.Id) return null;
-			this.codeImageId = entry.Id;
-			return entry.Id;
-		} catch {
-			return null;
-		}
+		const result = await this.runDocker(
+			["image", "inspect", "--format", "{{.Id}}", image],
+			true,
+		);
+		const id = result.stdout.trim();
+		if (result.exitCode !== 0 || !id) return null;
+		this.codeImageId ??= id;
+		return this.codeImageId;
 	}
 
 	private async withPortReservationLock<T>(
@@ -563,15 +570,10 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		// Recreating here replaces running `coderunner rebuild-workspaces` after
 		// every update: a container created by an earlier control plane is on an
 		// earlier image, so it is recycled with this release's run arguments. A
-		// container with no image reported is left adoptable.
+		// container with no label predates this check, so it is stale too.
 		const expectedImageId = await this.currentCodeImageId();
-		const createdImageId =
-			container.Config?.Labels?.[CODE_IMAGE_ID_LABEL] ?? container.Image;
-		if (
-			expectedImageId !== null &&
-			createdImageId !== undefined &&
-			createdImageId !== expectedImageId
-		) {
+		const createdImageId = container.Config?.Labels?.[CODE_IMAGE_ID_LABEL];
+		if (expectedImageId !== null && createdImageId !== expectedImageId) {
 			log.info("recreating code container for a new workspace image", {
 				workspaceId: workspace.id,
 				from: createdImageId,
