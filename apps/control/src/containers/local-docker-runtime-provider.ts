@@ -541,7 +541,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		workspace: WorkspaceRow,
 		name: string,
 		container: DockerInspectContainer,
-	): Promise<CodeContainerStatus | null> {
+	): Promise<CodeContainerStatus | "recreate-in-slot" | null> {
 		if (!v2LabelsMatch(container, workspace.id)) {
 			await this.runDocker(["rm", "-f", name], true);
 			return null;
@@ -579,6 +579,16 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 				from: createdImageId,
 				to: expectedImageId,
 			});
+			if (container.State?.Running) {
+				// The running container already holds a capacity slot. Hand it to
+				// the replacement under the admission lock, so no other workspace
+				// can take it between this rm and the create.
+				await this.withAdmissionLock(async () => {
+					await this.runDocker(["rm", "-f", name], true);
+					this.pendingCreates += 1;
+				});
+				return "recreate-in-slot";
+			}
 			await this.runDocker(["rm", "-f", name], true);
 			return null;
 		}
@@ -847,21 +857,26 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	): Promise<CodeContainerStatus> {
 		const expectedName = codeContainerName(workspace.id);
 		const existing = await this.inspectContainer(expectedName);
+		let slotReserved = false;
 		if (existing) {
 			const adopted = await this.adoptCodeContainer(
 				workspace,
 				expectedName,
 				existing,
 			);
-			if (adopted) {
+			if (adopted === "recreate-in-slot") {
+				slotReserved = true;
+			} else if (adopted) {
 				return adopted;
 			}
 		}
 
 		// Admission control: serialize capacity check + pending increment
-		await this.withAdmissionLock(async () => {
-			await this.checkCapacity();
-		});
+		if (!slotReserved) {
+			await this.withAdmissionLock(async () => {
+				await this.checkCapacity();
+			});
+		}
 
 		const createdAt = performance.now();
 		let createdOk = false;
