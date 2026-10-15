@@ -12,11 +12,14 @@
 # lifetime — Gradle is no longer in memory while the simulation runs.
 #
 # See docs/decisions/025-detach-sim-from-gradle.md.
+#
+# Modes (7th arg): run (default), debug (JDWP agent + $HOME/sim-debug.json),
+# build (gradle build only). See docs/decisions/045-sim-debugging.md.
 
 set -euo pipefail
 
 if [[ "$#" -lt 6 ]]; then
-  echo "Usage: $0 <project_root> <gradle_cache_dir> <max_workers> <gradle_jvmargs> <robot_jvmargs> <init_script>" >&2
+  echo "Usage: $0 <project_root> <gradle_cache_dir> <max_workers> <gradle_jvmargs> <robot_jvmargs> <init_script> [run|debug|build]" >&2
   exit 64
 fi
 
@@ -26,6 +29,18 @@ gradle_max_workers="$3"
 gradle_jvmargs="$4"
 robot_jvmargs="$5"
 init_script="$6"
+sim_mode="${7:-run}"
+
+case "$sim_mode" in
+  run|debug|build) ;;
+  *)
+    echo "Unknown sim mode: $sim_mode" >&2
+    exit 64
+    ;;
+esac
+
+debug_port=5005
+debug_marker="$HOME/sim-debug.json"
 
 cd "$project_root"
 
@@ -34,6 +49,13 @@ if [[ -f "$init_script" ]]; then
   init_args=(--init-script "$init_script")
 fi
 
+gradle_task="simulateExternalJavaRelease"
+if [[ "$sim_mode" == "build" ]]; then
+  gradle_task="build"
+fi
+
+# Gradle normally prints BUILD FAILED itself; say it explicitly so a killed or
+# OOM'd Gradle still fails the run (the control plane greps for it).
 ./gradlew \
   --no-daemon \
   --no-watch-fs \
@@ -42,7 +64,15 @@ fi
   --project-cache-dir "$gradle_cache" \
   "-Dorg.gradle.jvmargs=$gradle_jvmargs" \
   "${init_args[@]}" \
-  simulateExternalJavaRelease
+  "$gradle_task" || {
+  gradle_status=$?
+  echo "BUILD FAILED: Gradle exited with code $gradle_status" >&2
+  exit "$gradle_status"
+}
+
+if [[ "$sim_mode" == "build" ]]; then
+  exit 0
+fi
 
 descriptor="$project_root/build/sim/release_java.json"
 if [[ ! -f "$descriptor" ]]; then
@@ -84,6 +114,18 @@ read -r -a robot_jvmargs_array <<<"$robot_jvmargs"
 java_args=("${robot_jvmargs_array[@]}")
 if [[ -n "$lib_dir" ]]; then
   java_args+=("-Djava.library.path=$lib_dir")
+fi
+
+if [[ "$sim_mode" == "debug" ]]; then
+  # Loopback only: in network mode workspaces share a Docker network, and an
+  # attached debugger can run arbitrary code in this JVM. quiet=y: the agent's
+  # "Listening for transport" banner goes through C stdio, and wpiutil's fmt
+  # then aborts ("negative value") writing to the same piped stdout while
+  # loading HAL extensions.
+  java_args+=("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${debug_port},timeout=120000,quiet=y")
+  echo "Waiting up to 120s for the editor's debugger to attach on port ${debug_port}..."
+  # $$ survives exec, so this is the robot JVM's pid (and sim.pid's).
+  printf '{"port":%s,"pid":%s}\n' "$debug_port" "$$" >"$debug_marker"
 fi
 
 exec java "${java_args[@]}" -jar "$robot_jar"

@@ -14,6 +14,11 @@
 # <server-data-dir>/data (src/vs/server/node/server.main.ts). openvscode-server
 # only honoured --user-data-dir via a Gitpod patch. --server-data-dir ${HOME}
 # yields /config/data/{User,Machine} — the same layout init-frc-setup seeds.
+#
+# --reconnection-grace-time 30: a reloaded or removed editor iframe never
+# disconnects cleanly, so its extension host (and Java language server, ~1 GB
+# with Gradle) otherwise lingers for the 3 h default. Every project switch
+# remounts the iframe. A client away longer than 30 s reloads the editor.
 
 EXTENSIONS_DIR="${HOME}/extensions"
 
@@ -25,6 +30,7 @@ codium_args=(
   --disable-workspace-trust
   --extensions-dir "${EXTENSIONS_DIR}"
   --server-data-dir "${HOME}"
+  --reconnection-grace-time 30
 )
 
 if [[ -n "${VSCODE_BASE_PATH:-}" && "${VSCODE_BASE_PATH:-/}" != "/" ]]; then

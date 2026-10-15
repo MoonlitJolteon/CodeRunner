@@ -3,6 +3,7 @@ const projects = [
 	"apps/control/tsconfig.json",
 	"apps/web/tsconfig.json",
 	"scripts/tsconfig.json",
+	"containers/code/coderunner-debug/tsconfig.json",
 ];
 
 for (const project of projects) {

@@ -194,6 +194,53 @@ describe("simulation HTTP API", () => {
 		);
 	});
 
+	test("HTTP run start honours mode, restart reuses it, and bad modes are rejected", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+		const modes: string[] = [];
+		const recordingFactory: RunCommandFactory = (context) => {
+			modes.push(context.mode);
+			return controlled.commandFactory(context);
+		};
+		await withApp(
+			async (app) => {
+				const cookie = cookieFrom(await login(app, "alice"));
+				const workspace = workspaceBySlug(app, "alice");
+				const post = (body: unknown) =>
+					app.fetch(
+						new Request("http://localhost/u/alice/api/sim/run", {
+							method: "POST",
+							headers: { cookie, "content-type": "application/json" },
+							body: JSON.stringify(body),
+						}),
+					);
+
+				expect((await post({ action: "start", mode: "debug" })).status).toBe(
+					202,
+				);
+				await waitFor(() => modes.length === 1);
+				expect((await post({ action: "restart" })).status).toBe(202);
+				await waitFor(() => modes.length === 2);
+				expect((await post({ action: "start" })).status).toBe(202);
+				await waitFor(() => modes.length === 3);
+				expect(modes).toEqual(["debug", "debug", "run"]);
+
+				expect((await post({ action: "start", mode: "profile" })).status).toBe(
+					400,
+				);
+				app.runs.stopWorkspace(workspace.id);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: recordingFactory,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 26090, end: 26099 },
+				vscodePortRange: { start: 33390, end: 33399 },
+				halsimPortRange: { start: 34390, end: 34399 },
+			},
+		);
+	});
+
 	test("Driver Station patch returns 409 when robot code is not running", async () => {
 		const fakeDocker = createFakeDocker();
 
@@ -538,6 +585,67 @@ describe("simulation HTTP API", () => {
 				simPortRange: { start: 26070, end: 26079 },
 				vscodePortRange: { start: 33370, end: 33379 },
 				halsimPortRange: { start: 34370, end: 34379 },
+			},
+		);
+	});
+
+	test("auto chooser bridge ignores NT4 text frames that are not message arrays", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+		const sockets: FakeWebSocket[] = [];
+
+		await withApp(
+			async (app) => {
+				const loginResponse = await login(app, "alice");
+				const cookie = cookieFrom(loginResponse);
+				const workspace = workspaceBySlug(app, "alice");
+				app.runs.start(workspace);
+				await waitFor(() => controlled.commands.length === 1);
+				controlled.commands[0]?.writeStdout("NT4 listening on 5810");
+				await waitFor(
+					() =>
+						app.runs.getWorkspaceSnapshot(workspace.id).status === "running",
+				);
+
+				const response = await app.fetch(
+					new Request("http://localhost/u/alice/api/sim/auto-choosers", {
+						headers: { cookie },
+					}),
+				);
+				await waitFor(
+					() =>
+						sockets.length === 1 && sockets[0]?.readyState === WebSocket.OPEN,
+				);
+				const refreshed = await app.fetch(
+					new Request("http://localhost/u/alice/api/sim/auto-choosers", {
+						headers: { cookie },
+					}),
+				);
+
+				expect(response.status).toBe(200);
+				expect(refreshed.status).toBe(200);
+				expect(await refreshed.json()).toMatchObject({
+					ok: true,
+					nt4: { connected: true },
+				});
+				app.runs.stopWorkspace(workspace.id);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				nt4AutoWebSocketFactory: () => {
+					const socket = new FakeWebSocket();
+					sockets.push(socket);
+					queueMicrotask(() => {
+						socket.open();
+						socket.message({});
+					});
+					return socket as unknown as WebSocket;
+				},
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 26100, end: 26109 },
+				vscodePortRange: { start: 33400, end: 33409 },
+				halsimPortRange: { start: 34400, end: 34409 },
 			},
 		);
 	});

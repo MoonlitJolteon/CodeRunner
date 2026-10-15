@@ -4,6 +4,13 @@ set -euo pipefail
 HOME="${HOME:-/config}"
 pid_file="${SIM_PID_FILE:-$HOME/sim.pid}"
 project_root="${SIM_PROJECT_ROOT:-/workspace/project}"
+# run-sim.sh's Gradle (incl. Build mode) is identified by this workspace's cache dir.
+sim_cache_dir="${GRADLE_PROJECT_CACHE_DIR:-$HOME/.gradle-project-sim}"
+
+# Debug-run handshake files (see run-sim.sh and the coderunner-debug extension).
+clear_sim_files() {
+  rm -f "$pid_file" "$HOME/sim-debug.json" "$HOME"/sim-debug.*.claim
+}
 
 process_state() {
   local pid="$1"
@@ -74,7 +81,7 @@ sim_candidate_pids() {
     [[ -n "${pid:-}" && -n "${args:-}" ]] || continue
     [[ "$pid" != "$$" && "$pid" != "$BASHPID" ]] || continue
     case "$args" in
-      *"org.gradle.wrapper.GradleWrapperMain"*simulate*|*"$project_root/build/libs/"*.jar*)
+      *"org.gradle.wrapper.GradleWrapperMain"*simulate*|*"org.gradle.wrapper.GradleWrapperMain"*"--project-cache-dir $sim_cache_dir "*|*"$project_root/build/libs/"*.jar*)
         echo "$pid"
         ;;
     esac
@@ -141,7 +148,7 @@ send_signal_to_pids() {
 
 mapfile -t candidates < <(sim_candidate_pids | sort -nu)
 if [[ "${#candidates[@]}" -eq 0 ]]; then
-  rm -f "$pid_file"
+  clear_sim_files
   echo "sim is not running"
   exit 0
 fi
@@ -155,7 +162,7 @@ for _ in {1..40}; do
   mapfile -t remaining < <(sim_candidate_pids | sort -nu)
   mapfile -t remaining_groups < <(groups_with_processes "${target_groups[@]}")
   if [[ "${#remaining[@]}" -eq 0 && "${#remaining_groups[@]}" -eq 0 ]]; then
-    rm -f "$pid_file"
+    clear_sim_files
     echo "sim stopped"
     exit 0
   fi
@@ -167,4 +174,4 @@ mapfile -t remaining < <(sim_candidate_pids | sort -nu)
 mapfile -t remaining_groups < <(groups_with_processes "${target_groups[@]}")
 send_signal_to_groups KILL "${remaining_groups[@]}"
 send_signal_to_pids KILL "${remaining[@]}"
-rm -f "$pid_file"
+clear_sim_files

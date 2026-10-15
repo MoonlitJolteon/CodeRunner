@@ -43,11 +43,12 @@ for Gradle, project compilation, and simulation. The editor includes the
 **wpilibsuite.vscode-wpilib 2026.1.1** extension. Students do not need Java or
 VS Code installed on their own devices.
 
-### Can I build or start simulation from the WPILib extension?
+### Can I build, debug, or start a simulation from the WPILib extension?
 
-You can use the extension's build commands. Its simulation command should also
-work technically, but you should not use it in CodeRunner. Start simulations
-with **Start** in the Driver Station so CodeRunner uses its supported headless
+Use CodeRunner's controls in the Driver Station. Select **Start**, **Debug**,
+or **Build** from the **▾** beside the main button, then click the button to run
+that mode. The extension's commands may work technically, but do not use them
+in CodeRunner. The Driver Station uses CodeRunner's supported headless
 simulation path and connects the controls and telemetry. When robot code and
 communications are ready, choose a mode and click **Enable**.
 

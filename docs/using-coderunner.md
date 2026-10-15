@@ -23,11 +23,11 @@ commit and push any work you want to keep.
 
 :::important[Start the simulation from CodeRunner]
 
-The WPILib extension can start a simulation, but you should not use it here.
-Click **Start** in the Driver Station at the bottom of the page so CodeRunner
-can use its supported headless simulation setup and connect the controls and
-telemetry. Standalone builds can still be run from the extension when you only
-want to compile and check your code.
+Click **Start** in the Driver Station at the bottom of the page for normal
+robot simulation. The **▾** beside it also offers **Debug** and **Build** when
+you need them. These controls are designed to work with CodeRunner and let you
+control your code from the browser. **Do not use** WPILib's *Simulate Robot
+Code*, *Debug Robot Code*, or *Build Robot Code* commands in CodeRunner.
 
 :::
 
