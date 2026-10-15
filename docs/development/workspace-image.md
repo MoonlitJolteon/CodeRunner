@@ -137,10 +137,12 @@ delegate-handler error as a regression.
 
 ## Refreshing running student containers
 
-The control plane recreates a student's container on its next request when
-the container was created from an older image than the code image tag now
-points to (decision 046). Rebuilding or pulling the image is enough; running
-containers move over within about 10 seconds.
+The control plane resolves the code image tag once, when it first needs it,
+and creates containers from that image ID. On its next request for a student,
+it recreates any container created from a different image (decision 046). A
+rebuilt or pulled image therefore reaches students only after the control plane
+restarts. Restart `bun run dev:control` after `bun run docker:build:workspace`;
+`--watch` does not notice image changes.
 
 To force fresh containers regardless of image, use:
 
@@ -158,8 +160,8 @@ This runs `scripts/rebuild-workspaces.ts`, which:
 
 Student project files and editor state are preserved; they live in
 bind-mounted directories under `data/users/` and are never touched by this
-script. The control plane re-creates containers on next request using the
-new image.
+script. The control plane re-creates containers on next request, from the
+image ID it resolved at startup.
 
 Pass `--dry-run` to see what would be removed without making changes:
 

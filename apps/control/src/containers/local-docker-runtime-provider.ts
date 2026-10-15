@@ -59,9 +59,6 @@ import {
 } from "./types";
 
 const log = getLogger("containers");
-// How long a resolved code image ID is trusted, and so how soon after a
-// `docker compose pull` running workspaces are recycled onto the new image.
-const CODE_IMAGE_ID_TTL_MS = 10_000;
 const CODE_IMAGE_ID_LABEL = "frc-sim.image-id";
 
 export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
@@ -76,8 +73,8 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	private portReservationLock: Promise<void> = Promise.resolve();
 	private admissionLock: Promise<void> = Promise.resolve();
 	private pendingCreates = 0;
-	/** The code image tag's current ID; adoption runs on every proxied request. */
-	private codeImageId: { id: string; checkedAt: number } | null = null;
+	/** The code image tag's ID, resolved once and kept for this process. */
+	private codeImageId: string | null = null;
 
 	constructor(
 		private readonly storage: AppStorage,
@@ -396,7 +393,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		]);
 	}
 
-	/** Returns the code image's current ID. */
+	/** Returns the code image ID that containers are created from. */
 	private async ensureImage(): Promise<string> {
 		const imageId = await this.currentCodeImageId();
 		if (imageId === null) {
@@ -410,14 +407,14 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	}
 
 	/**
-	 * What `docker run` of the code image tag would use now. Compared against
-	 * this (not an ID pinned at boot) so a replacement container always
-	 * matches and is never recreated again. Null while the image is missing.
+	 * The code image tag's ID, pinned on first resolution so a later
+	 * `docker compose pull` changes nothing until the control plane restarts.
+	 * Control and workspace images are released together, so an update always
+	 * restarts it. Null while the image is missing.
 	 */
 	private async currentCodeImageId(): Promise<string | null> {
-		const cached = this.codeImageId;
-		if (cached && Date.now() - cached.checkedAt < CODE_IMAGE_ID_TTL_MS) {
-			return cached.id;
+		if (this.codeImageId) {
+			return this.codeImageId;
 		}
 		const image = this.storage.config.codeImage;
 		const result = await this.runDocker(["image", "inspect", image], true);
@@ -425,7 +422,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		try {
 			const [entry] = JSON.parse(result.stdout) as Array<{ Id?: string }>;
 			if (!entry?.Id) return null;
-			this.codeImageId = { id: entry.Id, checkedAt: Date.now() };
+			this.codeImageId = entry.Id;
 			return entry.Id;
 		} catch {
 			return null;
@@ -564,9 +561,9 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 
 		// A pulled workspace image only reaches students through new containers.
 		// Recreating here replaces running `coderunner rebuild-workspaces` after
-		// every update, at the cost of recycling live sessions within
-		// CODE_IMAGE_ID_TTL_MS of a pull. A container with no image reported is
-		// left adoptable.
+		// every update: a container created by an earlier control plane is on an
+		// earlier image, so it is recycled with this release's run arguments. A
+		// container with no image reported is left adoptable.
 		const expectedImageId = await this.currentCodeImageId();
 		const createdImageId =
 			container.Config?.Labels?.[CODE_IMAGE_ID_LABEL] ?? container.Image;
@@ -693,6 +690,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			`frc-sim.workspace=${workspace.id}`,
 			// Compared on adoption against the same `docker image inspect` ID,
 			// so the check never depends on how the image store formats IDs.
+			// The container runs that ID too (below), not the movable tag.
 			"--label",
 			`${CODE_IMAGE_ID_LABEL}=${imageId}`,
 			// Mount sources are resolved by the Docker daemon against the HOST
@@ -759,11 +757,12 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			}
 		}
 
-		args.push(this.storage.config.codeImage);
+		args.push(imageId);
 		log.info("creating code container", {
 			workspaceId: workspace.id,
 			name,
 			image: this.storage.config.codeImage,
+			imageId,
 			simPort,
 			vscodePort,
 			halsimPort,

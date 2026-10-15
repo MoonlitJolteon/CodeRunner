@@ -227,7 +227,7 @@ type FakeContainer = {
 	ports: FakeContainerPort[];
 	networks?: string[];
 	mounts?: FakeContainerMount[];
-	/** Image ID; containers created by the fake runner get the current one. */
+	/** Image the container was created from (the last `docker run` arg). */
 	image?: string;
 };
 
@@ -439,7 +439,7 @@ export function createFakeDocker(
 				ports: parsedPorts,
 				networks,
 				mounts: parseMountFlags(args),
-				image: image.id,
+				image: args.at(-1) ?? "",
 			});
 			options.onRun?.(name, parsedPorts);
 			return ok("fake-container-id\n");

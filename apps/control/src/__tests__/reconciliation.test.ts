@@ -1,6 +1,7 @@
-import { describe, expect, setSystemTime, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { LocalDockerRuntimeProvider } from "../containers";
 import { codeContainerName, codeVolumeName } from "../containers/metadata";
 import { createFakeDocker, login, withApp, workspaceBySlug } from "./helpers";
 
@@ -283,50 +284,53 @@ describe("container reconciliation", () => {
 		);
 	});
 
-	test("a pull recycles a running container once the cached image ID expires", async () => {
+	test("a pull recycles running containers only after a control-plane restart", async () => {
 		const fakeDocker = createFakeDocker();
-		const runs = () =>
-			fakeDocker.calls.filter((call) => call[0] === "run").length;
+		const runs = () => fakeDocker.calls.filter((call) => call[0] === "run");
 
-		try {
-			await withApp(
-				async (app) => {
-					await login(app, "alice");
-					const workspace = workspaceBySlug(app, "alice");
-					const name = codeContainerName(workspace.id);
-					const start = Date.now();
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const name = codeContainerName(workspace.id);
 
-					setSystemTime(start);
-					await app.containers.ensureCodeContainer(workspace);
-					expect(runs()).toBe(1);
+				await app.containers.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(1);
+				expect(runs()[0]?.at(-1)).toBe("fake-image");
 
-					// `docker compose pull` while the control plane keeps running.
-					fakeDocker.image.id = "sha256:pulled";
-					await app.containers.ensureCodeContainer(workspace);
-					expect(runs()).toBe(1);
+				// `docker compose pull` under the running control plane: the pinned
+				// ID still matches, and new containers stay on the pinned image.
+				fakeDocker.image.id = "sha256:pulled";
+				await app.containers.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(1);
+				await app.containers.removeCodeContainer(workspace.id);
+				await app.containers.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(2);
+				expect(fakeDocker.containers.get(name)?.image).toBe("fake-image");
 
-					setSystemTime(start + 11_000);
-					const status = await app.containers.ensureCodeContainer(workspace);
-					expect(status.state).toBe("running");
-					expect(runs()).toBe(2);
-					expect(fakeDocker.containers.get(name)?.image).toBe("sha256:pulled");
-
-					// The replacement matches the tag, so it is adopted from now on.
-					setSystemTime(start + 22_000);
-					await app.containers.ensureCodeContainer(workspace);
-					expect(runs()).toBe(2);
-				},
-				{
+				// `docker compose up -d` restarts the control plane on the new tag.
+				const restarted = new LocalDockerRuntimeProvider(app.storage, {
 					dockerRunner: fakeDocker.runner,
-					codeImage: "coderunner-workspace:test",
-					simPortRange: { start: 25842, end: 25843 },
-					vscodePortRange: { start: 33062, end: 33063 },
-					halsimPortRange: { start: 34062, end: 34063 },
-				},
-			);
-		} finally {
-			setSystemTime();
-		}
+					portAvailable: async () => true,
+				});
+				const status = await restarted.ensureCodeContainer(workspace);
+				expect(status.state).toBe("running");
+				expect(runs()).toHaveLength(3);
+				expect(fakeDocker.containers.get(name)?.image).toBe("sha256:pulled");
+				expect(runs()[2]).toContain("frc-sim.image-id=sha256:pulled");
+
+				// The replacement matches, so it is adopted from now on.
+				await restarted.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(3);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25842, end: 25843 },
+				vscodePortRange: { start: 33062, end: 33063 },
+				halsimPortRange: { start: 34062, end: 34063 },
+			},
+		);
 	});
 
 	test("lease row exists but container is missing triggers recreation", async () => {

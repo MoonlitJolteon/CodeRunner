@@ -147,9 +147,9 @@ demote commands.
 
 :::important[Use these steps for every new CodeRunner release]
 
-Updating the control container is not enough: existing student workspaces keep
-using the old workspace image until you rebuild them. Schedule a time when no
-students are active, then complete every step below.
+Restarting the control plane recycles every student workspace container, which
+disconnects active editor sessions. Schedule a time when no students are active,
+then complete every step below.
 
 :::
 
@@ -170,9 +170,11 @@ docker compose pull
 docker compose up -d
 ```
 
-Student workspace containers on the old image are recreated automatically on
-their next request, within about 10 seconds of the pull. This disconnects
-active editor sessions. Student project files are bind-mounted and survive.
+When the restarted control plane next sees each student's workspace container,
+it recreates it on the new workspace image. Open browser tabs move over within a
+few seconds; other students move over on their next visit. Student project files
+are bind-mounted and survive. Pulling alone changes nothing until `up -d`
+restarts the control plane.
 
 ### 3. Verify the update
 
