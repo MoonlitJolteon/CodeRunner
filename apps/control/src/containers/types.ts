@@ -30,6 +30,8 @@ export type LocalDockerRuntimeProviderOptions = ContainerOrchestratorOptions;
 
 export type DockerInspectContainer = {
 	Name?: string;
+	/** Image ID (`sha256:…`) the container was created from. */
+	Image?: string;
 	State?: {
 		Running?: boolean;
 		Status?: string;

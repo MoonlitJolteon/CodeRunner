@@ -137,8 +137,12 @@ delegate-handler error as a regression.
 
 ## Refreshing running student containers
 
-After rebuilding and pushing a new image, containers that are already running
-on the host continue to use the old image until they are re-created. Use:
+The control plane recreates a student's container on its next request when
+the container was created from an older image than the code image tag now
+points to (decision 046). Rebuilding or pulling the image is enough; running
+containers move over within about 10 seconds.
+
+To force fresh containers regardless of image, use:
 
 ```bash
 bun run docker:rebuild-workspaces

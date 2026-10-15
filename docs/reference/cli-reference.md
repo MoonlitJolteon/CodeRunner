@@ -90,7 +90,7 @@ avoids needing either form for the first admin — see
 | `docker:build:workspace` | Builds the workspace image locally from `containers/code/Dockerfile`, tagged with the same canonical name the pull uses — so a rebuild is picked up directly by `docker compose up`. Use when iterating on the container itself; normal deployments pull the prebuilt image instead. |
 | `docker:build:control` | Builds the control-plane image locally. It builds the web shell and AdvantageScope, and makes a best-effort download of the latest prebuilt PathPlanner web artifact (release builds pass a pinned `PATHPLANNER_DIST_TAG` instead, which makes that download required). Normal deployments pull the published image instead. |
 | `docker:cleanup` | Removes all stopped managed containers (those with the `frc-sim.managed=true` label). Safe to run while the control plane is up. Accepts `--dry-run` to preview what would be removed. |
-| `docker:rebuild-workspaces` | Removes all running and stopped managed V2 workspace containers and clears their database leases, forcing fresh containers on next login. Student project files are untouched; they are bind-mounted and survive container removal. Accepts `--dry-run`. Run this after updating the workspace image to force students into the new image on their next session. |
+| `docker:rebuild-workspaces` | Removes all running and stopped managed V2 workspace containers and clears their database leases, forcing fresh containers on next login. Student project files are untouched; they are bind-mounted and survive container removal. Accepts `--dry-run`. Not needed after updating the workspace image: the control plane recreates containers on an older image automatically. |
 
 ## Users and Access
 

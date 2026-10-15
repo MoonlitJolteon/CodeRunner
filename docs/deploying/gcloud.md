@@ -302,7 +302,8 @@ The **Deploy** workflow (`.github/workflows/deploy.yml`):
 2. `scp`s the compose files to the VM, pins `CODERUNNER_TAG=<tag>` in
    `/opt/coderunner/.env`, runs `docker compose pull` + `up -d`, then recycles
    managed workspace containers (student data is preserved; only containers are
-   removed) via `docker compose exec control coderunner rebuild-workspaces`
+   removed) via `docker compose exec control coderunner rebuild-workspaces`.
+   The control plane would also recycle them on its own (decision 046).
 3. Polls `/healthz` until the service is healthy
 
 Nothing is built on the VM; emsdk, Node, and Bun are not installed there.

@@ -227,6 +227,8 @@ type FakeContainer = {
 	ports: FakeContainerPort[];
 	networks?: string[];
 	mounts?: FakeContainerMount[];
+	/** Image ID; containers created by the fake runner get the current one. */
+	image?: string;
 };
 
 export function ok(stdout = ""): DockerCommandResult {
@@ -263,6 +265,7 @@ export function dockerInspect(container: FakeContainer): unknown {
 			Labels: container.labels,
 		},
 		Mounts: container.mounts,
+		Image: container.image,
 		NetworkSettings: {
 			Ports: portsMap,
 			Networks: networks,
@@ -308,12 +311,15 @@ export function createFakeDocker(
 	const containers = new Map<string, FakeContainer>();
 	const calls: string[][] = [];
 	const failRunPortsOnce = new Set(options.failRunPortsOnce ?? []);
+	// What `docker image inspect` reports for the code image; a test can change
+	// it to simulate a pull.
+	const image = { id: "fake-image" };
 
 	const runner: DockerRunner = async (args) => {
 		calls.push([...args]);
 
 		if (args[0] === "image" && args[1] === "inspect") {
-			return ok(JSON.stringify([{ Id: "fake-image" }]));
+			return ok(JSON.stringify([{ Id: image.id }]));
 		}
 
 		if (args[0] === "container" && args[1] === "inspect") {
@@ -433,6 +439,7 @@ export function createFakeDocker(
 				ports: parsedPorts,
 				networks,
 				mounts: parseMountFlags(args),
+				image: image.id,
 			});
 			options.onRun?.(name, parsedPorts);
 			return ok("fake-container-id\n");
@@ -475,7 +482,7 @@ export function createFakeDocker(
 		return missing(`unhandled docker args: ${args.join(" ")}`);
 	};
 
-	return { runner, containers, calls };
+	return { runner, containers, calls, image };
 }
 
 export type ExecOverride = {

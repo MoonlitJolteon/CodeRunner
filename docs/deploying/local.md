@@ -170,18 +170,11 @@ docker compose pull
 docker compose up -d
 ```
 
-### 3. Rebuild student workspaces
+Student workspace containers on the old image are recreated automatically on
+their next request, within about 10 seconds of the pull. This disconnects
+active editor sessions. Student project files are bind-mounted and survive.
 
-Recreate all student containers so they use the new workspace image:
-
-```bash
-docker compose exec control coderunner rebuild-workspaces
-```
-
-This disconnects active editor sessions. Student project files are bind-mounted
-and survive the rebuild.
-
-### 4. Verify the update
+### 3. Verify the update
 
 ```bash
 curl http://localhost:4000/healthz

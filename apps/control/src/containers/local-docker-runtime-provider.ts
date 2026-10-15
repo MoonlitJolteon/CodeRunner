@@ -59,6 +59,10 @@ import {
 } from "./types";
 
 const log = getLogger("containers");
+// How long a resolved code image ID is trusted, and so how soon after a
+// `docker compose pull` running workspaces are recycled onto the new image.
+const CODE_IMAGE_ID_TTL_MS = 10_000;
+const CODE_IMAGE_ID_LABEL = "frc-sim.image-id";
 
 export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	private readonly dockerRunner: DockerRunner;
@@ -72,6 +76,8 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	private portReservationLock: Promise<void> = Promise.resolve();
 	private admissionLock: Promise<void> = Promise.resolve();
 	private pendingCreates = 0;
+	/** The code image tag's current ID; adoption runs on every proxied request. */
+	private codeImageId: { id: string; checkedAt: number } | null = null;
 
 	constructor(
 		private readonly storage: AppStorage,
@@ -390,14 +396,39 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		]);
 	}
 
-	private async ensureImage(): Promise<void> {
-		const image = this.storage.config.codeImage;
-		const result = await this.runDocker(["image", "inspect", image], true);
-		if (result.exitCode !== 0) {
+	/** Returns the code image's current ID. */
+	private async ensureImage(): Promise<string> {
+		const imageId = await this.currentCodeImageId();
+		if (imageId === null) {
+			const image = this.storage.config.codeImage;
 			log.error("code image not available", { image });
 			throw new Error(
 				`CODE image ${image} is not available. Build it with bun run docker:build:workspace.`,
 			);
+		}
+		return imageId;
+	}
+
+	/**
+	 * What `docker run` of the code image tag would use now. Compared against
+	 * this (not an ID pinned at boot) so a replacement container always
+	 * matches and is never recreated again. Null while the image is missing.
+	 */
+	private async currentCodeImageId(): Promise<string | null> {
+		const cached = this.codeImageId;
+		if (cached && Date.now() - cached.checkedAt < CODE_IMAGE_ID_TTL_MS) {
+			return cached.id;
+		}
+		const image = this.storage.config.codeImage;
+		const result = await this.runDocker(["image", "inspect", image], true);
+		if (result.exitCode !== 0) return null;
+		try {
+			const [entry] = JSON.parse(result.stdout) as Array<{ Id?: string }>;
+			if (!entry?.Id) return null;
+			this.codeImageId = { id: entry.Id, checkedAt: Date.now() };
+			return entry.Id;
+		} catch {
+			return null;
 		}
 	}
 
@@ -531,6 +562,28 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			return null;
 		}
 
+		// A pulled workspace image only reaches students through new containers.
+		// Recreating here replaces running `coderunner rebuild-workspaces` after
+		// every update, at the cost of recycling live sessions within
+		// CODE_IMAGE_ID_TTL_MS of a pull. A container with no image reported is
+		// left adoptable.
+		const expectedImageId = await this.currentCodeImageId();
+		const createdImageId =
+			container.Config?.Labels?.[CODE_IMAGE_ID_LABEL] ?? container.Image;
+		if (
+			expectedImageId !== null &&
+			createdImageId !== undefined &&
+			createdImageId !== expectedImageId
+		) {
+			log.info("recreating code container for a new workspace image", {
+				workspaceId: workspace.id,
+				from: createdImageId,
+				to: expectedImageId,
+			});
+			await this.runDocker(["rm", "-f", name], true);
+			return null;
+		}
+
 		const adoptedPorts = this.adoptablePorts(container);
 		if (!adoptedPorts) {
 			await this.runDocker(["rm", "-f", name], true);
@@ -600,7 +653,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		vscodePort: number | null,
 		halsimPort: number | null,
 	): Promise<CodeContainerStatus> {
-		await this.ensureImage();
+		const imageId = await this.ensureImage();
 		const config = this.storage.config;
 		const homePath = workspaceHomePath(workspace);
 		await mkdir(homePath, { recursive: true, mode: 0o700 });
@@ -638,6 +691,10 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			"frc-sim.role=code",
 			"--label",
 			`frc-sim.workspace=${workspace.id}`,
+			// Compared on adoption against the same `docker image inspect` ID,
+			// so the check never depends on how the image store formats IDs.
+			"--label",
+			`${CODE_IMAGE_ID_LABEL}=${imageId}`,
 			// Mount sources are resolved by the Docker daemon against the HOST
 			// filesystem, so they go through toHostPath (a no-op outside the
 			// containerized deployment). Docker requires -v for SELinux relabeling;

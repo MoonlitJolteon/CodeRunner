@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { codeContainerName, codeVolumeName } from "../containers/metadata";
@@ -184,6 +184,149 @@ describe("container reconciliation", () => {
 				halsimPortRange: { start: 34054, end: 34055 },
 			},
 		);
+	});
+
+	for (const running of [true, false]) {
+		test(`adoption recreates a ${running ? "running" : "stopped"} container from an older image`, async () => {
+			const fakeDocker = createFakeDocker();
+
+			await withApp(
+				async (app) => {
+					await login(app, "alice");
+					const workspace = workspaceBySlug(app, "alice");
+					const name = codeContainerName(workspace.id);
+
+					// Otherwise adoptable, but created before the image was updated.
+					fakeDocker.containers.set(name, {
+						name,
+						running,
+						labels: {
+							"frc-sim.managed": "true",
+							"frc-sim.version": "v2",
+							"frc-sim.role": "code",
+							"frc-sim.workspace": workspace.id,
+						},
+						ports: [
+							{ hostPort: 25840, containerPort: 5810, hostIp: "127.0.0.1" },
+							{ hostPort: 33060, containerPort: 3000, hostIp: "127.0.0.1" },
+							{ hostPort: 34060, containerPort: 3300, hostIp: "127.0.0.1" },
+						],
+						image: "sha256:older",
+					});
+
+					const status = await app.containers.ensureCodeContainer(workspace);
+					expect(status.state).toBe("running");
+					expect(fakeDocker.calls).toContainEqual(["rm", "-f", name]);
+					expect(fakeDocker.calls).not.toContainEqual(["start", name]);
+					expect(fakeDocker.containers.get(name)?.image).toBe("fake-image");
+					const runCall = fakeDocker.calls.find((call) => call[0] === "run");
+					expect(runCall).toContain("frc-sim.image-id=fake-image");
+
+					// The replacement is on the current image, so a second pass adopts it.
+					await app.containers.ensureCodeContainer(workspace);
+					expect(
+						fakeDocker.calls.filter((call) => call[0] === "run"),
+					).toHaveLength(1);
+				},
+				{
+					dockerRunner: fakeDocker.runner,
+					codeImage: "coderunner-workspace:test",
+					simPortRange: { start: 25840, end: 25841 },
+					vscodePortRange: { start: 33060, end: 33061 },
+					halsimPortRange: { start: 34060, end: 34061 },
+				},
+			);
+		});
+	}
+
+	test("adoption trusts the image ID label over the container's Image field", async () => {
+		const fakeDocker = createFakeDocker();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const name = codeContainerName(workspace.id);
+
+				// An image store that reports container images in another form
+				// must not make every adoption look stale.
+				fakeDocker.containers.set(name, {
+					name,
+					running: true,
+					labels: {
+						"frc-sim.managed": "true",
+						"frc-sim.version": "v2",
+						"frc-sim.role": "code",
+						"frc-sim.workspace": workspace.id,
+						"frc-sim.image-id": "fake-image",
+					},
+					ports: [
+						{ hostPort: 25844, containerPort: 5810, hostIp: "127.0.0.1" },
+						{ hostPort: 33064, containerPort: 3000, hostIp: "127.0.0.1" },
+						{ hostPort: 34064, containerPort: 3300, hostIp: "127.0.0.1" },
+					],
+					image: "sha256:other-format",
+				});
+
+				const status = await app.containers.ensureCodeContainer(workspace);
+				expect(status.state).toBe("running");
+				expect(fakeDocker.calls).not.toContainEqual(["rm", "-f", name]);
+				expect(fakeDocker.calls.some((call) => call[0] === "run")).toBe(false);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25844, end: 25845 },
+				vscodePortRange: { start: 33064, end: 33065 },
+				halsimPortRange: { start: 34064, end: 34065 },
+			},
+		);
+	});
+
+	test("a pull recycles a running container once the cached image ID expires", async () => {
+		const fakeDocker = createFakeDocker();
+		const runs = () =>
+			fakeDocker.calls.filter((call) => call[0] === "run").length;
+
+		try {
+			await withApp(
+				async (app) => {
+					await login(app, "alice");
+					const workspace = workspaceBySlug(app, "alice");
+					const name = codeContainerName(workspace.id);
+					const start = Date.now();
+
+					setSystemTime(start);
+					await app.containers.ensureCodeContainer(workspace);
+					expect(runs()).toBe(1);
+
+					// `docker compose pull` while the control plane keeps running.
+					fakeDocker.image.id = "sha256:pulled";
+					await app.containers.ensureCodeContainer(workspace);
+					expect(runs()).toBe(1);
+
+					setSystemTime(start + 11_000);
+					const status = await app.containers.ensureCodeContainer(workspace);
+					expect(status.state).toBe("running");
+					expect(runs()).toBe(2);
+					expect(fakeDocker.containers.get(name)?.image).toBe("sha256:pulled");
+
+					// The replacement matches the tag, so it is adopted from now on.
+					setSystemTime(start + 22_000);
+					await app.containers.ensureCodeContainer(workspace);
+					expect(runs()).toBe(2);
+				},
+				{
+					dockerRunner: fakeDocker.runner,
+					codeImage: "coderunner-workspace:test",
+					simPortRange: { start: 25842, end: 25843 },
+					vscodePortRange: { start: 33062, end: 33063 },
+					halsimPortRange: { start: 34062, end: 34063 },
+				},
+			);
+		} finally {
+			setSystemTime();
+		}
 	});
 
 	test("lease row exists but container is missing triggers recreation", async () => {
