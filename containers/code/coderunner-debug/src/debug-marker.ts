@@ -47,6 +47,28 @@ export function claimDebugRun(home: string, pid: number): boolean {
 	}
 }
 
+/** True if `promise` resolves within `ms`; false if it rejects or is late. */
+export async function resolvesWithin(
+	promise: Promise<unknown>,
+	ms: number,
+): Promise<boolean> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const late = new Promise<boolean>((resolve) => {
+		timer = setTimeout(() => resolve(false), ms);
+	});
+	try {
+		return await Promise.race([
+			promise.then(
+				() => true,
+				() => false,
+			),
+			late,
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 /** The sim runs as root and the editor as abc, so EPERM still means alive. */
 export function isProcessAlive(pid: number): boolean {
 	try {

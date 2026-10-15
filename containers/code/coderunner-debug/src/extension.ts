@@ -9,10 +9,12 @@ import {
 	isProcessAlive,
 	parseDebugMarker,
 	readTextFile,
+	resolvesWithin,
 } from "./debug-marker";
 
 const ATTACH_ATTEMPTS = 3;
 const LISTEN_POLL_MS = 250;
+const WINDOW_CHECK_MS = 5_000;
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,6 +30,19 @@ async function waitForListener(marker: DebugMarker): Promise<boolean> {
 		await delay(LISTEN_POLL_MS);
 	}
 	return false;
+}
+
+/**
+ * Whether this extension host still has a browser window. An editor tab that
+ * was reloaded or removed leaves its host running for codium-server's
+ * reconnection grace; calls into its window then never answer. getCommands
+ * round-trips to the window and has no side effects.
+ */
+function hasWindow(): Promise<boolean> {
+	return resolvesWithin(
+		Promise.resolve(vscode.commands.getCommands()),
+		WINDOW_CHECK_MS,
+	);
 }
 
 async function attach(marker: DebugMarker): Promise<void> {
@@ -58,13 +73,19 @@ export function activate(context: vscode.ExtensionContext): void {
 	const markerPath = join(home, "sim-debug.json");
 	let handledPid: number | null = null;
 
+	const claimAndAttach = async (marker: DebugMarker) => {
+		// A windowless host that won the claim would attach where no one sees it.
+		if (!(await hasWindow())) return;
+		if (claimDebugRun(home, marker.pid)) {
+			await attach(marker);
+		}
+	};
+
 	const check = () => {
 		const marker = parseDebugMarker(readTextFile(markerPath));
 		if (!marker || marker.pid === handledPid) return;
 		handledPid = marker.pid;
-		if (claimDebugRun(home, marker.pid)) {
-			void attach(marker);
-		}
+		void claimAndAttach(marker);
 	};
 
 	// Polling: the marker lives outside the workspace folder, where VS Code's

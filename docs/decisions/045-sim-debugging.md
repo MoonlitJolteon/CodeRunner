@@ -45,15 +45,24 @@ was designed and then dropped after review. The sim runs as root
 root-side relay, which could race with Restart and kill the new run. Students
 stop the sim with CodeRunner's Stop.
 
-**Known limitation.** The attach claim belongs to whichever extension host
-takes it first, and losing hosts don't retry. If the claiming tab is closed
-or reloaded during startup, the run fails at the JDWP timeout. An editor tab
-that went away uncleanly (browser crash, discarded tab) can also leave its
-extension host running for codium-server's reconnection grace period; if
-that host wins the claim, its attach never reaches a window and the run
-fails the same way. Clicking Debug again retries the race. If this shows up
-in practice, the fix is to time-box the claimer and let losing hosts keep
-polling (or shorten `--reconnection-grace-time`).
+**Windowless hosts don't claim.** A reloaded or removed editor iframe never
+disconnects cleanly, so its extension host keeps running for codium-server's
+reconnection grace. Every project switch remounts the iframe. The RC build
+showed this: after two switches, three hosts (each with its own Java
+language server) were alive, and the first Debug run was claimed by a stale
+host whose attach never reached a window. Two changes fix it:
+
+- Before claiming, the extension round-trips to its window
+  (`vscode.commands.getCommands()`, 5 s limit). A host with no window never
+  answers, so it skips the claim.
+- `codium-server` runs with `--reconnection-grace-time 30` (default 3 h), so
+  a stale host and its language server exit within 30 s. A client away
+  longer than that has to reload the editor.
+
+**Known limitation.** The attach claim belongs to whichever live extension
+host takes it first, and losing hosts don't retry. If the claiming tab is
+closed or reloaded during startup, the run fails at the JDWP timeout.
+Clicking Debug again retries.
 
 **Build** runs `./gradlew build` (what WPILib's *Build Robot Code* runs, tests
 included). It skips readiness detection, so Gradle output mentioning

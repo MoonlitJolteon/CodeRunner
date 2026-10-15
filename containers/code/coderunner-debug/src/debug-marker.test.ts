@@ -7,6 +7,7 @@ import {
 	isPortListening,
 	isProcessAlive,
 	parseDebugMarker,
+	resolvesWithin,
 } from "./debug-marker";
 
 describe("parseDebugMarker", () => {
@@ -70,5 +71,21 @@ describe("isPortListening", () => {
 		);
 		expect(isPortListening(header, 5005)).toBe(false);
 		expect(isPortListening(null, 5005)).toBe(false);
+	});
+});
+
+describe("resolvesWithin", () => {
+	test("is true when the promise resolves in time", async () => {
+		expect(await resolvesWithin(Promise.resolve([]), 1_000)).toBe(true);
+	});
+
+	test("is false when the promise never settles", async () => {
+		expect(await resolvesWithin(new Promise(() => {}), 20)).toBe(false);
+	});
+
+	test("is false when the promise rejects", async () => {
+		expect(await resolvesWithin(Promise.reject(new Error("x")), 1_000)).toBe(
+			false,
+		);
 	});
 });
