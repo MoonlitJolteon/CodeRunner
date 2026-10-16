@@ -8,7 +8,7 @@ title: Deployment Overview
 CodeRunner is self-hosted. You run the control plane and the per-student
 workspace containers on a machine you control; there is no managed SaaS.
 
-:::tip Recommended for new deployments
+:::tip[Recommended for new deployments]
 
 Start with [Local Deployment](./local.md). It is the simplest setup and works
 well for most teams running CodeRunner in a classroom or at team meetings.
