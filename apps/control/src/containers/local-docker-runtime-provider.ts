@@ -60,6 +60,8 @@ import {
 
 const log = getLogger("containers");
 const CODE_IMAGE_ID_LABEL = "frc-sim.image-id";
+/** How long a "running" ensure result is reused before Docker is asked again. */
+const RUNNING_STATUS_TTL_MS = 2_000;
 
 export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	private readonly dockerRunner: DockerRunner;
@@ -69,6 +71,16 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	private readonly activeEnsures = new Map<
 		string,
 		Promise<CodeContainerStatus>
+	>();
+	/**
+	 * Recent "running" ensure results, so the browser's once-a-second status
+	 * polls do not each spawn a `docker container inspect`. Every stop and
+	 * remove clears its entry; a container that dies outside the control plane
+	 * still reads as running for up to the TTL.
+	 */
+	private readonly runningStatuses = new Map<
+		WorkspaceId,
+		{ status: CodeContainerStatus; at: number }
 	>();
 	private portReservationLock: Promise<void> = Promise.resolve();
 	private admissionLock: Promise<void> = Promise.resolve();
@@ -154,6 +166,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 
 	async stopWorkspace(workspaceId: WorkspaceId): Promise<void> {
 		await stopWorkspaceContainers(this.storage, this.dockerRunner, workspaceId);
+		this.runningStatuses.delete(workspaceId);
 	}
 
 	async restartWorkspace(workspaceId: WorkspaceId): Promise<WorkspaceRuntime> {
@@ -172,6 +185,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 
 	async removeWorkspace(workspaceId: WorkspaceId): Promise<void> {
 		await removeCodeContainer(this.storage, this.dockerRunner, workspaceId);
+		this.runningStatuses.delete(workspaceId);
 		// Deletion, not recycling — so the demo-mode /config volume goes too.
 		await removeCodeVolume(this.dockerRunner, workspaceId);
 	}
@@ -291,6 +305,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 
 	async stopCodeContainer(workspaceId: WorkspaceId): Promise<void> {
 		await stopCodeContainer(this.storage, this.dockerRunner, workspaceId);
+		this.runningStatuses.delete(workspaceId);
 	}
 
 	async stopWorkspaceSim(workspaceId: WorkspaceId): Promise<boolean> {
@@ -299,10 +314,12 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 
 	async removeCodeContainer(workspaceId: WorkspaceId): Promise<void> {
 		await removeCodeContainer(this.storage, this.dockerRunner, workspaceId);
+		this.runningStatuses.delete(workspaceId);
 	}
 
 	async stopWorkspaceContainers(workspaceId: WorkspaceId): Promise<void> {
 		await stopWorkspaceContainers(this.storage, this.dockerRunner, workspaceId);
+		this.runningStatuses.delete(workspaceId);
 	}
 
 	async restartCodeContainer(
@@ -329,6 +346,10 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	async ensureCodeContainer(
 		workspace: WorkspaceRow,
 	): Promise<CodeContainerStatus> {
+		const cached = this.runningStatuses.get(workspace.id);
+		if (cached && Date.now() - cached.at < RUNNING_STATUS_TTL_MS) {
+			return cached.status;
+		}
 		const key = `code:${workspace.id}`;
 		const existing = this.activeEnsures.get(key);
 		if (existing) {
@@ -343,7 +364,11 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		});
 		this.activeEnsures.set(key, pending);
 		try {
-			return await pending;
+			const status = await pending;
+			if (status.state === "running") {
+				this.runningStatuses.set(workspace.id, { status, at: Date.now() });
+			}
+			return status;
 		} finally {
 			this.activeEnsures.delete(key);
 		}
