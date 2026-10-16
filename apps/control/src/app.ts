@@ -146,6 +146,9 @@ export async function createApp(
 			blockDevices,
 		});
 	const containers = runtimeProvider as LocalDockerRuntimeProvider;
+	if (!configuredRuntimeProvider) {
+		containers.pinCodeImageId();
+	}
 	const halsim = new HalSimBridge(
 		halsimWebSocketFactory ? { webSocketFactory: halsimWebSocketFactory } : {},
 	);

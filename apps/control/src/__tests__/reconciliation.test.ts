@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { LocalDockerRuntimeProvider } from "../containers";
 import { codeContainerName, codeVolumeName } from "../containers/metadata";
 import { createFakeDocker, login, withApp, workspaceBySlug } from "./helpers";
 
@@ -160,6 +161,7 @@ describe("container reconciliation", () => {
 						"frc-sim.version": "v2",
 						"frc-sim.role": "code",
 						"frc-sim.workspace": workspace.id,
+						"frc-sim.image-id": "fake-image",
 					},
 					ports: [
 						{ hostPort: 25834, containerPort: 5810, hostIp: "127.0.0.1" },
@@ -182,6 +184,132 @@ describe("container reconciliation", () => {
 				simPortRange: { start: 25834, end: 25835 },
 				vscodePortRange: { start: 33054, end: 33055 },
 				halsimPortRange: { start: 34054, end: 34055 },
+			},
+		);
+	});
+
+	for (const running of [true, false]) {
+		test(`adoption recreates a ${running ? "running" : "stopped"} container from an older image`, async () => {
+			const fakeDocker = createFakeDocker();
+
+			await withApp(
+				async (app) => {
+					await login(app, "alice");
+					const workspace = workspaceBySlug(app, "alice");
+					const name = codeContainerName(workspace.id);
+
+					// Otherwise adoptable, but created before image ID labels existed.
+					fakeDocker.containers.set(name, {
+						name,
+						running,
+						labels: {
+							"frc-sim.managed": "true",
+							"frc-sim.version": "v2",
+							"frc-sim.role": "code",
+							"frc-sim.workspace": workspace.id,
+						},
+						ports: [
+							{ hostPort: 25840, containerPort: 5810, hostIp: "127.0.0.1" },
+							{ hostPort: 33060, containerPort: 3000, hostIp: "127.0.0.1" },
+							{ hostPort: 34060, containerPort: 3300, hostIp: "127.0.0.1" },
+						],
+					});
+
+					const status = await app.containers.ensureCodeContainer(workspace);
+					expect(status.state).toBe("running");
+					expect(fakeDocker.calls).toContainEqual(["rm", "-f", name]);
+					expect(fakeDocker.calls).not.toContainEqual(["start", name]);
+					const runCall = fakeDocker.calls.find((call) => call[0] === "run");
+					expect(runCall).toContain("frc-sim.image-id=fake-image");
+
+					// The replacement is on the current image, so a second pass adopts it.
+					await app.containers.ensureCodeContainer(workspace);
+					expect(
+						fakeDocker.calls.filter((call) => call[0] === "run"),
+					).toHaveLength(1);
+				},
+				{
+					dockerRunner: fakeDocker.runner,
+					codeImage: "coderunner-workspace:test",
+					simPortRange: { start: 25840, end: 25841 },
+					vscodePortRange: { start: 33060, end: 33061 },
+					halsimPortRange: { start: 34060, end: 34061 },
+				},
+			);
+		});
+	}
+
+	test("a pull recycles running containers only after a control-plane restart", async () => {
+		const fakeDocker = createFakeDocker();
+		const runs = () => fakeDocker.calls.filter((call) => call[0] === "run");
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const name = codeContainerName(workspace.id);
+
+				const imageLabel = () =>
+					fakeDocker.containers.get(name)?.labels["frc-sim.image-id"];
+
+				await app.containers.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(1);
+				expect(imageLabel()).toBe("fake-image");
+
+				// `docker compose pull` under the running control plane: the pinned
+				// ID still matches, and new containers carry this process's ID.
+				fakeDocker.image.id = "sha256:pulled";
+				await app.containers.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(1);
+				await app.containers.removeCodeContainer(workspace.id);
+				await app.containers.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(2);
+				expect(imageLabel()).toBe("fake-image");
+
+				// `docker compose up -d` restarts the control plane on the new tag.
+				const restarted = new LocalDockerRuntimeProvider(app.storage, {
+					dockerRunner: fakeDocker.runner,
+					portAvailable: async () => true,
+				});
+				const status = await restarted.ensureCodeContainer(workspace);
+				expect(status.state).toBe("running");
+				expect(runs()).toHaveLength(3);
+				expect(imageLabel()).toBe("sha256:pulled");
+
+				// The replacement matches, so it is adopted from now on.
+				await restarted.ensureCodeContainer(workspace);
+				expect(runs()).toHaveLength(3);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25842, end: 25843 },
+				vscodePortRange: { start: 33062, end: 33063 },
+				halsimPortRange: { start: 34062, end: 34063 },
+			},
+		);
+	});
+
+	test("the image ID is pinned at boot, before a pull", async () => {
+		const fakeDocker = createFakeDocker();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+
+				// Pulled before anything needed a workspace container.
+				fakeDocker.image.id = "sha256:pulled";
+				await app.containers.ensureCodeContainer(workspace);
+				const runCall = fakeDocker.calls.find((call) => call[0] === "run");
+				expect(runCall).toContain("frc-sim.image-id=fake-image");
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25844, end: 25845 },
+				vscodePortRange: { start: 33064, end: 33065 },
+				halsimPortRange: { start: 34064, end: 34065 },
 			},
 		);
 	});

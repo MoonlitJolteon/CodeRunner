@@ -308,12 +308,15 @@ export function createFakeDocker(
 	const containers = new Map<string, FakeContainer>();
 	const calls: string[][] = [];
 	const failRunPortsOnce = new Set(options.failRunPortsOnce ?? []);
+	// What `docker image inspect` reports for the code image; a test can change
+	// it to simulate a pull.
+	const image = { id: "fake-image" };
 
 	const runner: DockerRunner = async (args) => {
 		calls.push([...args]);
 
 		if (args[0] === "image" && args[1] === "inspect") {
-			return ok(JSON.stringify([{ Id: "fake-image" }]));
+			return ok(`${image.id}\n`);
 		}
 
 		if (args[0] === "container" && args[1] === "inspect") {
@@ -475,7 +478,7 @@ export function createFakeDocker(
 		return missing(`unhandled docker args: ${args.join(" ")}`);
 	};
 
-	return { runner, containers, calls };
+	return { runner, containers, calls, image };
 }
 
 export type ExecOverride = {

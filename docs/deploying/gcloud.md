@@ -300,9 +300,10 @@ The **Deploy** workflow (`.github/workflows/deploy.yml`):
 
 1. Checks the GitHub release exists and both images are published for the tag
 2. `scp`s the compose files to the VM, pins `CODERUNNER_TAG=<tag>` in
-   `/opt/coderunner/.env`, runs `docker compose pull` + `up -d`, then recycles
-   managed workspace containers (student data is preserved; only containers are
-   removed) via `docker compose exec control coderunner rebuild-workspaces`
+   `/opt/coderunner/.env`, and runs `docker compose pull` + `up -d`. The
+   restarted control plane recreates each workspace container on the new
+   workspace image the next time it sees it. Student data is bind-mounted and
+   preserved.
 3. Polls `/healthz` until the service is healthy
 
 Nothing is built on the VM; emsdk, Node, and Bun are not installed there.
