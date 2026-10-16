@@ -3,16 +3,18 @@
 ## Decision
 
 When the control plane adopts an existing workspace container
-(`adoptCodeContainer`), it recreates the container if it was created from a
-different image than the one this control-plane process uses. After
+(`adoptCodeContainer`), it recreates the container if its `frc-sim.image-id`
+label differs from the workspace image ID this control-plane process pinned.
+After
 `docker compose pull` + `up -d`, a new workspace image reaches students on its
 own; `coderunner rebuild-workspaces` is no longer an update step, and the
 Deploy workflow no longer runs it.
 
 **The image ID is pinned per process.** The control plane resolves the code
 image tag (`docker image inspect`) at boot and keeps that ID until it exits.
-If the image is missing at boot, the first successful lookup pins it. This rests on one assumption: **control and workspace images always
-update together.** `release.yml` publishes both for every tag and stamps
+If the image is missing at boot, the first successful lookup pins it. This
+rests on one assumption: **control and workspace images always update
+together.** `release.yml` publishes both for every tag and stamps
 `org.opencontainers.image.version` on each, so every release changes both
 image IDs. Any update therefore recreates the control container (a new
 `CODERUNNER_TAG` changes `CODE_IMAGE`; a moved `latest` changes the control
@@ -46,8 +48,9 @@ adoptable while the image is missing.
 ## Consequences
 
 - After a control-plane restart onto a new release, each workspace is
-  recycled the next time it is seen. The restart has already dropped every
-  proxied session, so no extra disconnect is visible. Update between classes.
+  recycled the next time it is seen. That disconnects its editor and stops a
+  running sim, as `rebuild-workspaces` did. Update between classes. A restart
+  without a new image recycles nothing.
 - A workspace image rebuilt or pulled without restarting the control plane
   reaches only containers created after it (e.g. by `rebuild-workspaces`).
   Existing containers move over when the control plane restarts.

@@ -69,7 +69,12 @@ frc-sim.managed=true
 frc-sim.version=v2
 frc-sim.role=code
 frc-sim.workspace=<workspaceId>
+frc-sim.image-id=<image ID>
 ```
+
+The control plane recreates a container whose `frc-sim.image-id` (from
+`docker image inspect --format '{{.Id}}'`) differs from the image ID it looked
+up at startup, or that has no such label.
 
 ### Environment variables
 
@@ -93,6 +98,7 @@ docker run -d \
   --label frc-sim.version=v2 \
   --label frc-sim.role=code \
   --label frc-sim.workspace=<workspaceId> \
+  --label frc-sim.image-id=<image ID> \
   -v "$PWD/data/users/<workspaceId>/project:/workspace/project" \
   -v "$PWD/data/users/<workspaceId>/home:/config" \
   -p 127.0.0.1:<vscodePort>:3000 \

@@ -106,23 +106,27 @@ proxied through the control plane's single public port.
 
 ## Container labels
 
-Every managed container carries four Docker labels that the control plane uses
-to identify and reconcile containers across restarts:
+Every managed container carries Docker labels that the control plane uses to
+identify and reconcile containers across restarts:
 
 ```
 frc-sim.managed=true
 frc-sim.version=v2
 frc-sim.role=code
 frc-sim.workspace=<workspaceId>
+frc-sim.image-id=<workspace image ID when created>
 ```
 
-On startup, if the control plane finds an existing container with matching
-labels and the right port shape for the current mode — loopback-bound ports in
-port mode, attached to the workspace network with no published ports in
-network mode — it adopts it rather than creating a new one. A container
+When a workspace is next used (for example after a control-plane restart), if
+the control plane finds an existing container with matching labels and the
+right port shape for the current mode — loopback-bound ports in port mode,
+attached to the workspace network with no published ports in network mode — it
+adopts it rather than creating a new one. A container
 without matching labels, or whose port shape belongs to the other mode, is
 removed and replaced (this is also how a leftover from a prior deployment mode
-gets recreated after a cutover).
+gets recreated after a cutover). A container whose `frc-sim.image-id` differs
+from the workspace image ID the control plane looked up at startup is also
+replaced. This is how an update moves students onto the new workspace image.
 
 ## First-run behavior
 

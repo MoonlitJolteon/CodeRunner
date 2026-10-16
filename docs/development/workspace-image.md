@@ -40,8 +40,9 @@ docker build -f containers/code/Dockerfile -t ghcr.io/mathewdunne/coderunner-wor
 The build context is the repo root. The image is tagged with its canonical
 name — `${CODERUNNER_IMAGE_NS:-ghcr.io/mathewdunne}/coderunner-workspace:${CODERUNNER_TAG:-latest}` —
 the same name docker compose and the control plane's `CODE_IMAGE` default
-resolve to, so a local build is picked up directly by `docker compose up` or
-`bun run dev:control` with no re-tagging. Forks set `CODERUNNER_IMAGE_NS` (in
+resolve to, so new workspace containers use a local build with no re-tagging.
+Existing containers need a restart or rebuild to move over (see
+[Refreshing running student containers](#refreshing-running-student-containers)). Forks set `CODERUNNER_IMAGE_NS` (in
 `.env`) to their own registry/owner; `CODE_IMAGE` overrides the full image
 name outright.
 
@@ -137,12 +138,13 @@ delegate-handler error as a regression.
 
 ## Refreshing running student containers
 
-The control plane resolves the code image tag's ID at startup and labels
-every container it creates with it. On its next request for a student, it
-recreates any container labelled with a different ID. Running
-containers therefore move to a rebuilt or pulled image when the control plane
-restarts. Restart `bun run dev:control` after `bun run docker:build:workspace`
-(`--watch` does not notice image changes), or run `rebuild-workspaces`.
+The control plane looks up the workspace image's ID when it starts and labels
+every container it creates with that ID (`frc-sim.image-id`). The next time a
+student's workspace is used, it recreates the container if the label holds a
+different ID. Running containers therefore move to a rebuilt or pulled image
+when the control plane restarts: restart `bun run dev:control` after
+`bun run docker:build:workspace` (`--watch` does not notice image changes), or
+`docker compose restart control` for a compose stack.
 
 To force fresh containers regardless of image, use:
 
