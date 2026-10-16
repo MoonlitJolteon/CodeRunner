@@ -701,8 +701,10 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			"--label",
 			`frc-sim.workspace=${workspace.id}`,
 			// Compared on adoption against the same `docker image inspect` ID,
-			// so the check never depends on how the image store formats IDs.
-			// The container runs that ID too (below), not the movable tag.
+			// so the check never depends on how the image store formats IDs. It
+			// marks the control-plane process that created the container: after a
+			// pull, the tag below may already be newer, and the next process
+			// recycles the container anyway.
 			"--label",
 			`${CODE_IMAGE_ID_LABEL}=${imageId}`,
 			// Mount sources are resolved by the Docker daemon against the HOST
@@ -769,7 +771,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			}
 		}
 
-		args.push(imageId);
+		args.push(config.codeImage);
 		log.info("creating code container", {
 			workspaceId: workspace.id,
 			name,

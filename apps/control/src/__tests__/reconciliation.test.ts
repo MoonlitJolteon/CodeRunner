@@ -219,7 +219,6 @@ describe("container reconciliation", () => {
 					expect(status.state).toBe("running");
 					expect(fakeDocker.calls).toContainEqual(["rm", "-f", name]);
 					expect(fakeDocker.calls).not.toContainEqual(["start", name]);
-					expect(fakeDocker.containers.get(name)?.image).toBe("fake-image");
 					const runCall = fakeDocker.calls.find((call) => call[0] === "run");
 					expect(runCall).toContain("frc-sim.image-id=fake-image");
 
@@ -250,19 +249,22 @@ describe("container reconciliation", () => {
 				const workspace = workspaceBySlug(app, "alice");
 				const name = codeContainerName(workspace.id);
 
+				const imageLabel = () =>
+					fakeDocker.containers.get(name)?.labels["frc-sim.image-id"];
+
 				await app.containers.ensureCodeContainer(workspace);
 				expect(runs()).toHaveLength(1);
-				expect(runs()[0]?.at(-1)).toBe("fake-image");
+				expect(imageLabel()).toBe("fake-image");
 
 				// `docker compose pull` under the running control plane: the pinned
-				// ID still matches, and new containers stay on the pinned image.
+				// ID still matches, and new containers carry this process's ID.
 				fakeDocker.image.id = "sha256:pulled";
 				await app.containers.ensureCodeContainer(workspace);
 				expect(runs()).toHaveLength(1);
 				await app.containers.removeCodeContainer(workspace.id);
 				await app.containers.ensureCodeContainer(workspace);
 				expect(runs()).toHaveLength(2);
-				expect(fakeDocker.containers.get(name)?.image).toBe("fake-image");
+				expect(imageLabel()).toBe("fake-image");
 
 				// `docker compose up -d` restarts the control plane on the new tag.
 				const restarted = new LocalDockerRuntimeProvider(app.storage, {
@@ -272,8 +274,7 @@ describe("container reconciliation", () => {
 				const status = await restarted.ensureCodeContainer(workspace);
 				expect(status.state).toBe("running");
 				expect(runs()).toHaveLength(3);
-				expect(fakeDocker.containers.get(name)?.image).toBe("sha256:pulled");
-				expect(runs()[2]).toContain("frc-sim.image-id=sha256:pulled");
+				expect(imageLabel()).toBe("sha256:pulled");
 
 				// The replacement matches, so it is adopted from now on.
 				await restarted.ensureCodeContainer(workspace);
@@ -301,7 +302,7 @@ describe("container reconciliation", () => {
 				fakeDocker.image.id = "sha256:pulled";
 				await app.containers.ensureCodeContainer(workspace);
 				const runCall = fakeDocker.calls.find((call) => call[0] === "run");
-				expect(runCall?.at(-1)).toBe("fake-image");
+				expect(runCall).toContain("frc-sim.image-id=fake-image");
 			},
 			{
 				dockerRunner: fakeDocker.runner,
