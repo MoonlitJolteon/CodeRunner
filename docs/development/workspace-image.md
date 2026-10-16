@@ -139,7 +139,7 @@ delegate-handler error as a regression.
 
 The control plane resolves the code image tag's ID at startup and labels
 every container it creates with it. On its next request for a student, it
-recreates any container labelled with a different ID (decision 046). Running
+recreates any container labelled with a different ID. Running
 containers therefore move to a rebuilt or pulled image when the control plane
 restarts. Restart `bun run dev:control` after `bun run docker:build:workspace`
 (`--watch` does not notice image changes), or run `rebuild-workspaces`.

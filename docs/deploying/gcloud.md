@@ -303,7 +303,7 @@ The **Deploy** workflow (`.github/workflows/deploy.yml`):
    `/opt/coderunner/.env`, and runs `docker compose pull` + `up -d`. The
    restarted control plane recreates each workspace container on the new
    workspace image the next time it sees it. Student data is bind-mounted and
-   preserved (decision 046).
+   preservedfferent ID.
 3. Polls `/healthz` until the service is healthy
 
 Nothing is built on the VM; emsdk, Node, and Bun are not installed there.
