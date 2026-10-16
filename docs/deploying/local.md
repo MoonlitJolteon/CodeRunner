@@ -173,11 +173,8 @@ docker compose up -d
 
 `up -d` restarts the control plane on the new release. It then recreates each
 student's workspace container on the new workspace image the next time that
-student's browser reaches it: open tabs move over within a few seconds, and
-everyone else on their next visit. No `rebuild-workspaces` step is needed.
-Student project files are bind-mounted and survive. Pulling alone changes
-nothing until `up -d` restarts the control plane.
-
+student connects. No `rebuild-workspaces` step is needed.
+Student project files are bind-mounted and survive.
 ### 3. Verify the update
 
 ```bash
