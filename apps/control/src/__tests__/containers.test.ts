@@ -508,6 +508,60 @@ describe("code container orchestration", () => {
 		);
 	});
 
+	test("an ensure that finishes after a stop does not cache running", async () => {
+		const fakeDocker = createFakeDocker();
+		let holdInspect: Promise<void> | null = null;
+		let inspectHeld = () => {};
+		const runner: typeof fakeDocker.runner = async (args) => {
+			const result = await fakeDocker.runner(args);
+			if (holdInspect && args[0] === "container" && args[1] === "inspect") {
+				// A status poll inspects the still-running container, then stalls.
+				const held = holdInspect;
+				holdInspect = null;
+				inspectHeld();
+				await held;
+			}
+			return result;
+		};
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const name = codeContainerName(workspace.id);
+				await app.containers.ensureCodeContainer(workspace);
+				setSystemTime(new Date(Date.now() + 3_000));
+
+				try {
+					let releaseInspect = () => {};
+					holdInspect = new Promise((resolveHold) => {
+						releaseInspect = resolveHold;
+					});
+					const reachedInspect = new Promise<void>((resolveReached) => {
+						inspectHeld = resolveReached;
+					});
+					const poll = app.containers.ensureCodeContainer(workspace);
+					await reachedInspect;
+
+					await app.containers.stopWorkspace(workspace.id);
+					releaseInspect();
+					await poll;
+
+					await app.containers.ensureCodeContainer(workspace);
+					expect(fakeDocker.containers.get(name)?.running).toBe(true);
+				} finally {
+					setSystemTime();
+				}
+			},
+			{
+				dockerRunner: runner,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25818, end: 25818 },
+				vscodePortRange: { start: 33008, end: 33008 },
+			},
+		);
+	});
+
 	test("concurrent workspace startup reserves distinct port pairs", async () => {
 		const fakeDocker = createFakeDocker();
 
