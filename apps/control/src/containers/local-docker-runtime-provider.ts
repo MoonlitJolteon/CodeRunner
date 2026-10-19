@@ -386,7 +386,10 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			}
 			return status;
 		} finally {
-			this.activeEnsures.delete(key);
+			// A restart may have replaced this entry with its own ensure.
+			if (this.activeEnsures.get(key) === pending) {
+				this.activeEnsures.delete(key);
+			}
 		}
 	}
 

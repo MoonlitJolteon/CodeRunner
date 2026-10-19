@@ -562,6 +562,81 @@ describe("code container orchestration", () => {
 		);
 	});
 
+	test("an ensure that outlasts a restart does not drop the restart's in-flight ensure", async () => {
+		const fakeDocker = createFakeDocker();
+		const runs = () => fakeDocker.calls.filter((call) => call[0] === "run");
+		let holdInspect: Promise<void> | null = null;
+		let inspectHeld = () => {};
+		let holdRun: Promise<void> | null = null;
+		let runHeld = () => {};
+		const runner: typeof fakeDocker.runner = async (args) => {
+			if (holdRun && args[0] === "run") {
+				// The restart's ensure stalls before creating the container.
+				const held = holdRun;
+				holdRun = null;
+				runHeld();
+				await held;
+			}
+			const result = await fakeDocker.runner(args);
+			if (holdInspect && args[0] === "container" && args[1] === "inspect") {
+				// A status poll inspects the still-running container, then stalls.
+				const held = holdInspect;
+				holdInspect = null;
+				inspectHeld();
+				await held;
+			}
+			return result;
+		};
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				await app.containers.ensureCodeContainer(workspace);
+				setSystemTime(new Date(Date.now() + 3_000));
+
+				try {
+					let releaseInspect = () => {};
+					holdInspect = new Promise((resolveHold) => {
+						releaseInspect = resolveHold;
+					});
+					const reachedInspect = new Promise<void>((resolveReached) => {
+						inspectHeld = resolveReached;
+					});
+					const poll = app.containers.ensureCodeContainer(workspace);
+					await reachedInspect;
+
+					let releaseRun = () => {};
+					holdRun = new Promise((resolveHold) => {
+						releaseRun = resolveHold;
+					});
+					const reachedRun = new Promise<void>((resolveReached) => {
+						runHeld = resolveReached;
+					});
+					const restart = app.containers.restartCodeContainer(workspace);
+					await reachedRun;
+
+					releaseInspect();
+					await poll;
+					// Must join the restart's ensure rather than start its own create.
+					const latePoll = app.containers.ensureCodeContainer(workspace);
+					releaseRun();
+					await Promise.all([restart, latePoll]);
+
+					expect(runs()).toHaveLength(2);
+				} finally {
+					setSystemTime();
+				}
+			},
+			{
+				dockerRunner: runner,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25819, end: 25819 },
+				vscodePortRange: { start: 33009, end: 33009 },
+			},
+		);
+	});
+
 	test("concurrent workspace startup reserves distinct port pairs", async () => {
 		const fakeDocker = createFakeDocker();
 
