@@ -130,6 +130,10 @@ export class AppStorage {
 		mkdirSync(dirname(this.config.dbPath), { recursive: true });
 		this.db = new Database(this.config.dbPath, { create: true });
 		this.db.exec("PRAGMA foreign_keys = ON;");
+		// bun:sqlite blocks the event loop; WAL + NORMAL drops the per-write
+		// fsyncs that stall every request when the disk is busy.
+		this.db.exec("PRAGMA journal_mode = WAL;");
+		this.db.exec("PRAGMA synchronous = NORMAL;");
 	}
 
 	async initialize(): Promise<void> {

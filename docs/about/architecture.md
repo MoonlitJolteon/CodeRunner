@@ -142,7 +142,9 @@ requests because the sandbox does not receive the session cookie. See
 
 The control plane uses a single **SQLite** database (`data/app.db` by default)
 for users, sessions, workspace records, container port leases, and the audit
-log. There is no separate database server to run.
+log. There is no separate database server to run. It runs in WAL mode, so
+`app.db-wal` and `app.db-shm` sit beside it; copy all three (or use
+`bun run backup`) if you copy the database by hand while the plane is running.
 
 Student files live on the host under a predictable layout, one directory per
 workspace:
