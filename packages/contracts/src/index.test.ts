@@ -60,6 +60,11 @@ describe("simulation API schemas", () => {
 		).toEqual({
 			providers: ["github"],
 		});
+		expect(authProvidersResponseSchema.parse({ providers: ["auth0"] })).toEqual(
+			{
+				providers: ["auth0"],
+			},
+		);
 		expect(
 			authProvidersResponseSchema.safeParse({ providers: ["discord"] }).success,
 		).toBe(false);
@@ -393,5 +398,24 @@ describe("deployFilesSnapshotResponseSchema", () => {
 			],
 		});
 		expect(parsed.success).toBe(true);
+	});
+});
+
+describe("sim run command request", () => {
+	test("accepts each run mode and leaves mode out when omitted", () => {
+		for (const mode of ["run", "debug", "build"] as const) {
+			expect(
+				simRunCommandRequestSchema.parse({ action: "start", mode }),
+			).toEqual({ action: "start", mode });
+		}
+		expect(simRunCommandRequestSchema.parse({ action: "restart" })).toEqual({
+			action: "restart",
+		});
+	});
+
+	test("rejects unknown modes", () => {
+		expect(() =>
+			simRunCommandRequestSchema.parse({ action: "start", mode: "profile" }),
+		).toThrow();
 	});
 });

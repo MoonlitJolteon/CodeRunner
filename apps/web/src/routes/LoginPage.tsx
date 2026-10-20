@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { SiAuthentik, SiGithub, SiGoogle } from "react-icons/si";
+import type { IconType } from "react-icons";
+import { SiAuth0, SiAuthentik, SiGithub, SiGoogle } from "react-icons/si";
 import { useSearchParams } from "react-router";
 import coderunnerMascotImg from "@/assets/coderunner-mascot.png";
 import { authClient } from "@/lib/auth-client";
@@ -9,38 +10,44 @@ import {
 } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
 
+const PROVIDER_BUTTONS: Record<
+	AuthProvider,
+	{ label: string; Icon: IconType; className: string }
+> = {
+	github: {
+		label: "Sign in with GitHub",
+		Icon: SiGithub,
+		className:
+			"border-border bg-white/[0.06] text-foreground hover:bg-white/[0.11] hover:shadow-[0_0_18px_rgba(34,197,94,0.12)]",
+	},
+	google: {
+		label: "Sign in with Google",
+		Icon: SiGoogle,
+		className:
+			"border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
+	},
+	auth0: {
+		label: "Sign in with Auth0",
+		Icon: SiAuth0,
+		className:
+			"border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
+	},
+	authentik: {
+		label: "Sign in with Authentik",
+		Icon: SiAuthentik,
+		className:
+			"border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
+	},
+};
+
 interface OAuthButtonProps {
 	provider: AuthProvider;
 	disabled: boolean;
 	onClick: () => void;
 }
 
-const OAUTH_BUTTON_CONTENT: Record<
-	AuthProvider,
-	{ label: string; icon: typeof SiGithub; className: string }
-> = {
-	github: {
-		label: "Sign in with GitHub",
-		icon: SiGithub,
-		className:
-			"border-border bg-white/[0.06] text-foreground hover:bg-white/[0.11] hover:shadow-[0_0_18px_rgba(34,197,94,0.12)]",
-	},
-	google: {
-		label: "Sign in with Google",
-		icon: SiGoogle,
-		className:
-			"border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
-	},
-	authentik: {
-		label: "Sign in with Authentik",
-		icon: SiAuthentik,
-		className:
-			"border-border bg-white/[0.03] text-foreground hover:bg-white/[0.06]",
-	},
-};
-
 function OAuthButton({ provider, disabled, onClick }: OAuthButtonProps) {
-	const { label, icon: Icon, className } = OAUTH_BUTTON_CONTENT[provider];
+	const { label, Icon, className } = PROVIDER_BUTTONS[provider];
 	return (
 		<div className="rounded-lg border border-border bg-card p-2">
 			<button
@@ -112,9 +119,10 @@ export function LoginPage() {
 		setLoading(true);
 		setSignInError(null);
 		try {
-			if (provider === "authentik") {
+			if (provider === "auth0" || provider === "authentik") {
+				// Auth0 and Authentik are genericOAuth providers, not Better Auth social ones.
 				await authClient.signIn.oauth2({
-					providerId: "authentik",
+					providerId: provider,
 					callbackURL: "/",
 					errorCallbackURL: "/login",
 				});
@@ -208,11 +216,19 @@ export function LoginPage() {
 						)}
 					</div>
 
+					{/* Classroom guests */}
+					<a
+						href="/join"
+						className="mt-3 flex h-11 w-full items-center justify-center rounded-md border border-border text-[13px] font-semibold tracking-wide text-foreground transition-all hover:bg-white/[0.06]"
+					>
+						Join a classroom
+					</a>
+
 					{/* Fine print */}
 					<p className="mt-6 text-[10.5px] leading-relaxed text-muted-foreground">
 						Not on the roster?{" "}
 						<span className="text-foreground/60">
-							Ask your coach to add you.
+							Ask your coach for a classroom code.
 						</span>
 					</p>
 				</div>

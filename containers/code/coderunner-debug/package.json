@@ -1,0 +1,18 @@
+{
+	"name": "coderunner-debug",
+	"displayName": "CodeRunner Debug",
+	"description": "Attaches the Java debugger when a CodeRunner simulation is started with Debug.",
+	"publisher": "coderunner",
+	"version": "0.1.2",
+	"license": "MIT",
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"extensionKind": [
+		"workspace"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./dist/extension.js"
+}

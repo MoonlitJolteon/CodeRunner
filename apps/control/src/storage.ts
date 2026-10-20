@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -9,6 +9,7 @@ import type {
 	WorkspaceId,
 	WorkspaceSlug,
 } from "@frc-coderunner/contracts";
+import { recordAuditEvent } from "./audit";
 import {
 	addAllowlistEntry,
 	loadAllowlist,
@@ -159,10 +160,16 @@ export class AppStorage {
 			ensureWorkspace: async (userId, slug) => {
 				await this.ensureWorkspaceForUser(userId, slug);
 			},
+			audit: (event) => recordAuditEvent(this, event),
 		});
 		const { getMigrations } = await import("better-auth/db/migration");
 		const { runMigrations } = await getMigrations(this.auth.options);
 		await runMigrations();
+		// One guest per name per classroom. Lives here, not in a SQL migration,
+		// because Better Auth creates the user table and its classroom columns.
+		this.db.exec(
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_user_classroom_guest ON user(classroomId, guestNameKey) WHERE classroomId IS NOT NULL;",
+		);
 
 		// 5. Bootstrap admins from CODERUNNER_ADMIN_EMAIL. Runs after the allowlist
 		// is loaded and the better-auth `user` table exists, so it can both seed
@@ -177,7 +184,8 @@ export class AppStorage {
 				log.warn("no OAuth providers configured — login will not work", {
 					baseUrl: this.config.baseUrl,
 					hint:
-						"Set GITHUB_CLIENT_ID/SECRET, GOOGLE_CLIENT_ID/SECRET, or " +
+						"Set GITHUB_CLIENT_ID/SECRET, GOOGLE_CLIENT_ID/SECRET, " +
+						"AUTH0_DOMAIN/CLIENT_ID/CLIENT_SECRET, or " +
 						"AUTHENTIK_CLIENT_ID/SECRET+AUTHENTIK_ISSUER_URL in your .env",
 				});
 			} else {
@@ -193,7 +201,8 @@ export class AppStorage {
 	/**
 	 * Seed the accounts named in CODERUNNER_ADMIN_EMAIL so a fresh deployment
 	 * needs zero exec steps: each email is added to the allowlist (idempotent),
-	 * and any existing non-admin account with that email is promoted. Accounts
+	 * and any existing non-admin account with that email is promoted (except
+	 * Auth0 users, whose role comes from Auth0 at sign-in). Accounts
 	 * that have not signed in yet get the admin role from the user.create hook.
 	 */
 	private async seedBootstrapAdmins(): Promise<void> {
@@ -203,8 +212,14 @@ export class AppStorage {
 
 			// config.adminEmails is lowercased; the stored email keeps whatever
 			// case the OAuth provider returned, so match case-insensitively.
+			// Rows with an Auth0 account are skipped: Auth0 sets the role at every
+			// sign-in and only makes an admin email admin once it is verified,
+			// while a row here may hold an unverified Auth0 self-sign-up (and any
+			// GitHub/Google identity later linked onto it).
 			const user = this.db
-				.query("SELECT id, role FROM user WHERE lower(email) = ?")
+				.query(
+					"SELECT id, role FROM user WHERE lower(email) = ? AND NOT EXISTS (SELECT 1 FROM account WHERE account.userId = user.id AND account.providerId = 'auth0')",
+				)
 				.get(email) as { id: string; role: string | null } | null;
 			if (user && user.role !== "admin") {
 				this.db
@@ -282,12 +297,22 @@ export class AppStorage {
 		const placeholderProjectPath = projectPathFor(this.config, workspaceId);
 
 		let finalSlug: WorkspaceSlug | null = null;
-		const MAX_ATTEMPTS = 16;
-		for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+		// Numbered suffixes first (alice, alice-1 … alice-15), then random ones:
+		// a crowded base — every non-Latin guest name slugifies to "student" —
+		// would otherwise run out.
+		const NUMBERED_ATTEMPTS = 16;
+		const RANDOM_ATTEMPTS = 8;
+		for (
+			let attempt = 0;
+			attempt < NUMBERED_ATTEMPTS + RANDOM_ATTEMPTS;
+			attempt++
+		) {
+			const suffix =
+				attempt < NUMBERED_ATTEMPTS ? attempt : randomInt(1000, 1_000_000);
 			const candidate =
 				attempt === 0
 					? (baseSlug as WorkspaceSlug)
-					: (`${baseSlug.slice(0, 40 - `-${attempt}`.length)}-${attempt}` as WorkspaceSlug);
+					: (`${baseSlug.slice(0, 40 - `-${suffix}`.length)}-${suffix}` as WorkspaceSlug);
 
 			if (this.findWorkspaceBySlug(candidate)) continue;
 

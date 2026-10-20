@@ -3,25 +3,45 @@
  *
  * Creates and configures the betterAuth instance with:
  * - SQLite database (shared with AppStorage)
- * - GitHub + Google OAuth providers
+ * - GitHub + Google OAuth providers, plus Auth0 and Authentik via genericOAuth
  * - Custom user fields: role, slug
- * - Email allowlist enforcement via hooks
+ * - Email allowlist enforcement via hooks (Auth0 users: role claim instead)
  * - 14-day session expiry with daily refresh
  */
 
 import type { Database } from "bun:sqlite";
 import { type BetterAuthOptions, betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
-import { genericOAuth } from "better-auth/plugins";
+import type { AuditEventInput } from "../audit";
 import type { ControlConfig } from "../config";
 import { getLogger } from "../logging";
 import { isEmailAllowed, reloadAllowlist } from "./allowlist";
-import { buildGenericOAuthProviders, buildSocialProviders } from "./providers";
+import { classroomPlugin } from "./classroom-plugin";
+import { buildGenericOAuthPlugin, buildSocialProviders } from "./providers";
 
 /** Callback path used by `genericOAuth`, distinct from the core social-provider `/callback/:id`. */
 const GENERIC_OAUTH_CALLBACK_PATH = "/oauth2/callback/:providerId";
 
 const log = getLogger("auth");
+
+const ROSTER_MESSAGE =
+	"Your email is not on the roster. Ask your coach to add you.";
+
+/** True for the genericOAuth callback of the Auth0 provider. */
+function isAuth0Callback(
+	ctx:
+		| {
+				path?: string | undefined;
+				params?: Record<string, unknown> | undefined;
+		  }
+		| null
+		| undefined,
+): boolean {
+	return (
+		ctx?.path === GENERIC_OAUTH_CALLBACK_PATH &&
+		ctx.params?.providerId === "auth0"
+	);
+}
 
 /**
  * Reload allowlist.json from disk before enforcing it, so CLI edits
@@ -40,10 +60,9 @@ async function refreshAllowlistBeforeCheck(): Promise<void> {
 	}
 }
 
-export function slugFromEmail(email: string): string {
-	const local = email.split("@")[0] ?? "student";
+export function slugify(value: string): string {
 	return (
-		local
+		value
 			.toLowerCase()
 			.normalize("NFKD")
 			.replace(/[\u0300-\u036f]/gu, "")
@@ -54,9 +73,15 @@ export function slugFromEmail(email: string): string {
 	);
 }
 
+export function slugFromEmail(email: string): string {
+	return slugify(email.split("@")[0] ?? "student");
+}
+
 export type AuthCallbacks = {
 	/** Called after OAuth callback for new users to create their workspace. */
 	ensureWorkspace: (userId: string, slug: string) => Promise<void>;
+	/** Records an audit event (classroom guest joins). */
+	audit: (event: AuditEventInput) => void;
 };
 
 export function createAuth(
@@ -65,9 +90,9 @@ export function createAuth(
 	callbacks: AuthCallbacks,
 ) {
 	const socialProviders = config.demo ? {} : buildSocialProviders(config);
-	const genericOAuthProviders = config.demo
-		? []
-		: buildGenericOAuthProviders(config);
+	const genericOAuthPlugin = config.demo
+		? null
+		: buildGenericOAuthPlugin(config);
 
 	const options: BetterAuthOptions = {
 		database: db,
@@ -75,9 +100,14 @@ export function createAuth(
 		basePath: "/api/auth",
 		secret: config.sessionSecret,
 		socialProviders,
-		plugins: genericOAuthProviders.length
-			? [genericOAuth({ config: genericOAuthProviders })]
-			: [],
+		plugins: [
+			classroomPlugin({
+				db,
+				ensureWorkspace: callbacks.ensureWorkspace,
+				audit: callbacks.audit,
+			}),
+			...(genericOAuthPlugin ? [genericOAuthPlugin] : []),
+		],
 		session: {
 			expiresIn: 14 * 24 * 60 * 60, // 14 days in seconds
 			updateAge: 24 * 60 * 60, // refresh session expiry daily
@@ -99,6 +129,17 @@ export function createAuth(
 					required: false,
 					input: false,
 				},
+				// Classroom guests (decision 043). Better Auth adds these columns.
+				classroomId: {
+					type: "string",
+					required: false,
+					input: false,
+				},
+				guestNameKey: {
+					type: "string",
+					required: false,
+					input: false,
+				},
 			},
 		},
 		advanced: {
@@ -112,7 +153,28 @@ export function createAuth(
 		databaseHooks: {
 			user: {
 				create: {
-					before: async (user) => {
+					before: async (user, ctx) => {
+						const classroomId = (user as { classroomId?: string | null })
+							.classroomId;
+						if (classroomId) {
+							// Classroom guests: no allowlist, never admin, slug from name.
+							const slug = slugify(user.name);
+							log.info("creating classroom guest", { classroomId, slug });
+							return { data: { ...user, slug, role: "student" } };
+						}
+						const slug = slugFromEmail(user.email);
+						if (isAuth0Callback(ctx)) {
+							// Auth0 vets the user; the role claim replaces the allowlist.
+							// The Auth0 profile mapper already denied users with no role
+							// and put the role on `user`.
+							const role = (user as { role?: string }).role;
+							log.info("creating new auth0 user", {
+								email: user.email,
+								slug,
+								role,
+							});
+							return { data: { ...user, slug, role } };
+						}
 						// Enforce allowlist on new user creation
 						await refreshAllowlistBeforeCheck();
 						if (!isEmailAllowed(user.email)) {
@@ -120,11 +182,9 @@ export function createAuth(
 								email: user.email,
 							});
 							throw new APIError("FORBIDDEN", {
-								message:
-									"Your email is not on the roster. Ask your coach to add you.",
+								message: ROSTER_MESSAGE,
 							});
 						}
-						const slug = slugFromEmail(user.email);
 						const role = config.adminEmails.includes(user.email.toLowerCase())
 							? "admin"
 							: "student";
@@ -142,18 +202,21 @@ export function createAuth(
 		},
 		hooks: {
 			after: createAuthMiddleware(async (ctx) => {
-				// Enforce allowlist on returning users (OAuth callback). Social
-				// providers (GitHub/Google) land on /callback/:id; the genericOAuth
-				// plugin (Authentik) uses its own callback path.
+				const auth0 = isAuth0Callback(ctx);
+
+				// Social providers (GitHub/Google) land on /callback/:id; the
+				// genericOAuth plugin (Auth0, Authentik) uses its own callback path.
 				if (
 					ctx.path === "/callback/:id" ||
 					ctx.path === GENERIC_OAUTH_CALLBACK_PATH
 				) {
 					const newSession = ctx.context.newSession;
-					if (newSession) {
+					// Enforce allowlist on returning users (social OAuth callback).
+					// Auth0 users were checked against their role claim instead.
+					if (newSession && !auth0) {
 						await refreshAllowlistBeforeCheck();
 					}
-					if (newSession && !isEmailAllowed(newSession.user.email)) {
+					if (newSession && !auth0 && !isEmailAllowed(newSession.user.email)) {
 						log.warn("oauth callback rejected: not on allowlist", {
 							email: newSession.user.email,
 						});
@@ -162,8 +225,7 @@ export function createAuth(
 							newSession.session.token,
 						);
 						throw new APIError("FORBIDDEN", {
-							message:
-								"Your email is not on the roster. Ask your coach to add you.",
+							message: ROSTER_MESSAGE,
 						});
 					}
 

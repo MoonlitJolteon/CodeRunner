@@ -50,6 +50,7 @@ setsid "$RUN_SIM_SCRIPT" \
   "$GRADLE_SIM_JVMARGS" \
   "$ROBOT_SIM_JVMARGS" \
   "$INIT_SCRIPT" \
+  "${SIM_MODE:-run}" \
   >"$log_file" 2>&1 &
 echo "$!" >"$pid_file"
 echo "started sim with pid $(cat "$pid_file")"

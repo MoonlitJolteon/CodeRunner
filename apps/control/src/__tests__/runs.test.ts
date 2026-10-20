@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ControlAppOptions, createApp } from "../app";
-import type { RunCommandFactory } from "../runs";
+import { dockerRunScript, type RunCommandFactory } from "../runs";
 import {
 	cookieFrom,
 	createAdvantageScopeDist,
@@ -309,6 +309,176 @@ describe("run lifecycle and log streaming", () => {
 				simPortRange: { start: 25860, end: 25869 },
 				vscodePortRange: { start: 33060, end: 33069 },
 			},
+		);
+	});
+
+	test("passes the requested mode to the run command and remembers it", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const connection = app.runs.connect(workspace, () => {});
+
+				expect(app.runs.lastMode(workspace.id)).toBe("run");
+				app.runs.start(workspace, connection);
+				await waitFor(() => controlled.commands.length === 1);
+				expect(controlled.commands[0]?.context.mode).toBe("run");
+
+				app.runs.start(workspace, connection, "debug");
+				await waitFor(() => controlled.commands.length === 2);
+				expect(controlled.commands[1]?.context.mode).toBe("debug");
+				expect(app.runs.lastMode(workspace.id)).toBe("debug");
+				app.runs.stopWorkspace(workspace.id);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25870, end: 25879 },
+				vscodePortRange: { start: 33070, end: 33079 },
+			},
+		);
+	});
+
+	test("a successful build ends stopped and never reports running, even if output mentions NetworkTables", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const messages: unknown[] = [];
+				const connection = app.runs.connect(workspace, (message) =>
+					messages.push(message),
+				);
+
+				const runId = app.runs.start(workspace, connection, "build");
+				await waitFor(() => controlled.commands.length === 1);
+				controlled.commands[0]?.writeStdout(
+					"Download https://frcmaven.wpi.edu/.../networktables-java.jar",
+				);
+				controlled.commands[0]?.writeStdout("NT4 listening on 5810");
+				controlled.commands[0]?.writeStdout("BUILD SUCCESSFUL in 12s");
+				controlled.commands[0]?.exit(0);
+
+				await waitFor(() => app.storage.getRunJob(runId)?.state === "stopped");
+				expect(messages).not.toContainEqual({
+					type: "status",
+					status: "running",
+				});
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25880, end: 25889 },
+				vscodePortRange: { start: 33080, end: 33089 },
+			},
+		);
+	});
+
+	test("a failed build ends failed", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const connection = app.runs.connect(workspace, () => {});
+				const runId = app.runs.start(workspace, connection, "build");
+				await waitFor(() => controlled.commands.length === 1);
+				controlled.commands[0]?.writeStderr("BUILD FAILED in 3s");
+				controlled.commands[0]?.exit(1);
+				await waitFor(() => app.storage.getRunJob(runId)?.state === "failed");
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25890, end: 25899 },
+				vscodePortRange: { start: 33090, end: 33099 },
+			},
+		);
+	});
+
+	test("build mode times out on the build timeout alone", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const messages: unknown[] = [];
+				const connection = app.runs.connect(workspace, (message) =>
+					messages.push(message),
+				);
+				const runId = app.runs.start(workspace, connection, "build");
+				await waitFor(() => controlled.commands[0]?.killed === true);
+				expect(app.storage.getRunJob(runId)).toMatchObject({ state: "failed" });
+				expect(JSON.stringify(messages)).toContain("Build timed out");
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				runBuildTimeoutMs: 20,
+				simStartupTimeoutMs: 600_000,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25900, end: 25909 },
+				vscodePortRange: { start: 33160, end: 33169 },
+			},
+		);
+	});
+
+	test("a debug run waiting on the debugger is not failed by the readiness timeout", async () => {
+		const fakeDocker = createFakeDocker();
+		const controlled = createControlledRunCommands();
+
+		await withApp(
+			async (app) => {
+				await login(app, "alice");
+				const workspace = workspaceBySlug(app, "alice");
+				const connection = app.runs.connect(workspace, () => {});
+				const runId = app.runs.start(workspace, connection, "debug");
+				await waitFor(() => controlled.commands.length === 1);
+				controlled.commands[0]?.writeStdout(
+					"Waiting up to 120s for the editor's debugger to attach on port 5005...",
+				);
+				// Well past runBuildTimeoutMs + simStartupTimeoutMs (40 ms).
+				await Bun.sleep(150);
+				expect(controlled.commands[0]?.killed).toBe(false);
+				expect(app.storage.getRunJob(runId)).toMatchObject({
+					state: "building",
+				});
+				expect(app.runs.activeBuildCount()).toBe(0);
+				app.runs.stopWorkspace(workspace.id);
+			},
+			{
+				dockerRunner: fakeDocker.runner,
+				runCommandFactory: controlled.commandFactory,
+				runBuildTimeoutMs: 20,
+				simStartupTimeoutMs: 20,
+				codeImage: "coderunner-workspace:test",
+				simPortRange: { start: 25780, end: 25789 },
+				vscodePortRange: { start: 33170, end: 33179 },
+			},
+		);
+	});
+
+	test("the run script passes the mode to start-sim", () => {
+		expect(dockerRunScript("run")).toContain(
+			"SIM_MODE=run /usr/local/bin/start-sim.sh",
+		);
+		expect(dockerRunScript("debug")).toContain(
+			"SIM_MODE=debug /usr/local/bin/start-sim.sh",
+		);
+		expect(dockerRunScript("build")).toContain(
+			"SIM_MODE=build /usr/local/bin/start-sim.sh",
 		);
 	});
 

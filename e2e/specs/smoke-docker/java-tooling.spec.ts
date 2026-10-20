@@ -415,6 +415,48 @@ test.describe("real workspace Java tooling", () => {
 				"/usr/local/bin/stop-sim.sh",
 			]);
 
+			console.log(
+				"[java-smoke] starting a Debug run; coderunner-debug should attach",
+			);
+			await docker([
+				"exec",
+				"--user",
+				"abc",
+				"--env",
+				"HOME=/config",
+				"--env",
+				"SIM_MODE=debug",
+				robotWorkspace.name,
+				"/usr/local/bin/start-sim.sh",
+			]);
+			// suspend=y: robot code only runs once the debugger has attached.
+			const debugLog = await waitFor(
+				"debugger attach and robot startup",
+				async () =>
+					(
+						await docker(
+							["exec", robotWorkspace.name, "cat", "/config/sim.log"],
+							{ allowFailure: true },
+						)
+					).stdout,
+				(log) => /Robot program startup complete/.test(log),
+				180_000,
+			);
+			expect(debugLog).toContain(
+				"Waiting up to 120s for the editor's debugger to attach on port 5005...",
+			);
+			expect(debugLog).not.toMatch(/ERROR: JDWP|transport error/);
+			await expect(page.locator(".debug-toolbar")).toBeVisible();
+			await docker([
+				"exec",
+				"--user",
+				"abc",
+				"--env",
+				"HOME=/config",
+				robotWorkspace.name,
+				"/usr/local/bin/stop-sim.sh",
+			]);
+
 			const robotLogs = await toolingLogs(robotWorkspace.name);
 			expect(robotLogs).not.toMatch(/No delegateCommandHandler/);
 		} finally {

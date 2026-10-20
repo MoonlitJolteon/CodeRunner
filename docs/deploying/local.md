@@ -147,9 +147,10 @@ demote commands.
 
 :::important[Use these steps for every new CodeRunner release]
 
-Updating the control container is not enough: existing student workspaces keep
-using the old workspace image until you rebuild them. Schedule a time when no
-students are active, then complete every step below.
+An update replaces every student's workspace container with one on the new
+workspace image, which disconnects active editor sessions and stops running
+simulations. Schedule a time when no students are active, then complete every
+step below.
 
 :::
 
@@ -170,18 +171,11 @@ docker compose pull
 docker compose up -d
 ```
 
-### 3. Rebuild student workspaces
-
-Recreate all student containers so they use the new workspace image:
-
-```bash
-docker compose exec control coderunner rebuild-workspaces
-```
-
-This disconnects active editor sessions. Student project files are bind-mounted
-and survive the rebuild.
-
-### 4. Verify the update
+`up -d` restarts the control plane on the new release. It then recreates each
+student's workspace container on the new workspace image the next time that
+student connects. No `rebuild-workspaces` step is needed.
+Student project files are bind-mounted and survive.
+### 3. Verify the update
 
 ```bash
 curl http://localhost:4000/healthz

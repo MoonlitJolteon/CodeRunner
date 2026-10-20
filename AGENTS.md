@@ -77,6 +77,31 @@ from `showDriverStation` to make that possible. See
 `docs/decisions/041-project-preview.md` and
 [`docs/using-coderunner.md`](./docs/using-coderunner.md).
 
+**Classroom join codes (post-V2):** admins start a short-lived classroom
+(Admin → Classrooms) with a 6-digit code; students join at `/join` with the
+code and their name and become guest users (`user.classroomId` set, role
+`student`, no allowlist). A custom Better Auth plugin
+(`auth/classroom-plugin.ts`) mints the session; `app/classroom-routes.ts`
+rate-limits failed attempts and retires the browser's previous guest
+session. Guest sessions die with the classroom (checked in
+`getSessionFromRequest`), guests have a **Leave** button that stops their
+container, and `ClassroomSweeper` deletes guests of ended/expired
+classrooms. See `docs/decisions/043-classroom-join-codes.md`.
+
+**Auth0 SSO (post-V2):** optional third login provider (`AUTH0_*` env) via
+Better Auth's `genericOAuth`. Auth0 users skip the allowlist; their role comes
+from an ID-token roles claim, re-read at every sign-in. Users with no role are
+rejected in `mapProfileToUser` (after-hook throws are lost behind the callback
+redirect). See `docs/decisions/044-auth0-sso.md`.
+
+**Sim debugging (post-V2):** Start is a split button with **Debug** and
+**Build** run modes (`mode` on `POST /api/sim/run`, `SIM_MODE` into
+`run-sim.sh`). Debug starts the robot JVM with a loopback JDWP agent
+(`suspend=y`, 120 s) and writes `$HOME/sim-debug.json`. The bundled
+`containers/code/coderunner-debug` extension attaches VSCodium's Java
+debugger. Bump its version together with the Dockerfile's
+`CODERUNNER_DEBUG_VERSION`. See `docs/decisions/045-sim-debugging.md`.
+
 **Containerized control plane (post-V2):** the control plane ships as a Docker
 image (`containers/control/Dockerfile` → `ghcr.io/mathewdunne/coderunner-control`)
 and is deployed with docker compose (`docker-compose.yml` base +
@@ -134,7 +159,7 @@ arch-independent). See `docs/decisions/035-multi-arch-images-and-workflow-split.
 ## Key References
 
 - `docs/` + `website/` — docs site content and Docusaurus config; published at `https://mathewdunne.github.io/CodeRunner/`; run `bun run docs:dev` to browse locally, `bun run docs:build` to build.
-- `docs/decisions/` — all architecture decision logs (011–041 active; 001–010 archived under `docs/decisions/archive/`).
+- `docs/decisions/` — all architecture decision logs (011–046 active; 001–010 archived under `docs/decisions/archive/`).
 - Pinned AdvantageScope submodule: `vendor/AdvantageScope` at tag `v26.0.2`.
 
 ## Commands

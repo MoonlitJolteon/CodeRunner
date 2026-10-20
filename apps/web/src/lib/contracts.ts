@@ -6,6 +6,7 @@ export type {
 	AutoChooserPatch,
 	AutoChoosersResponse,
 	BridgeConnection,
+	ClassroomJoinError,
 	ContainersStatusResponse,
 	DriverStationPatch,
 	DsMode,
@@ -20,6 +21,7 @@ export type {
 	PreviewDocumentsResponse,
 	RunServerMessage,
 	SessionResponse,
+	SimRunMode,
 	SimRunStatus,
 	SimStatusResponse,
 } from "@frc-coderunner/contracts";
@@ -27,6 +29,7 @@ export type {
 export {
 	authProvidersResponseSchema,
 	autoChoosersResponseSchema,
+	classroomJoinErrorSchema,
 	gamepadClientMessageSchema,
 	gamepadServerMessageSchema,
 	gamepadStateSchema,

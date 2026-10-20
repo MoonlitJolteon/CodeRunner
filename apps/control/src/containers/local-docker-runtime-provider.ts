@@ -59,6 +59,9 @@ import {
 } from "./types";
 
 const log = getLogger("containers");
+const CODE_IMAGE_ID_LABEL = "frc-sim.image-id";
+/** How long a "running" ensure result is reused before Docker is asked again. */
+const RUNNING_STATUS_TTL_MS = 2_000;
 
 export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	private readonly dockerRunner: DockerRunner;
@@ -69,9 +72,27 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		string,
 		Promise<CodeContainerStatus>
 	>();
+	/**
+	 * Recent "running" ensure results, so the browser's once-a-second status
+	 * polls and the editor proxy do not each spawn a `docker container inspect`.
+	 * Every stop and remove clears its entry; a container that dies outside the
+	 * control plane still reads as running for up to the TTL.
+	 */
+	private readonly runningStatuses = new Map<
+		WorkspaceId,
+		{ status: CodeContainerStatus; at: number }
+	>();
+	/**
+	 * Bumped on every stop and remove. An ensure only caches its result if no
+	 * stop or remove happened while it ran, since it may have inspected the
+	 * container before it went away.
+	 */
+	private runningStatusEpoch = 0;
 	private portReservationLock: Promise<void> = Promise.resolve();
 	private admissionLock: Promise<void> = Promise.resolve();
 	private pendingCreates = 0;
+	/** The code image tag's ID, resolved once and kept for this process. */
+	private codeImageId: string | null = null;
 
 	constructor(
 		private readonly storage: AppStorage,
@@ -150,7 +171,9 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	}
 
 	async stopWorkspace(workspaceId: WorkspaceId): Promise<void> {
-		await stopWorkspaceContainers(this.storage, this.dockerRunner, workspaceId);
+		await this.withRunningStatusInvalidated(workspaceId, () =>
+			stopWorkspaceContainers(this.storage, this.dockerRunner, workspaceId),
+		);
 	}
 
 	async restartWorkspace(workspaceId: WorkspaceId): Promise<WorkspaceRuntime> {
@@ -168,7 +191,9 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	}
 
 	async removeWorkspace(workspaceId: WorkspaceId): Promise<void> {
-		await removeCodeContainer(this.storage, this.dockerRunner, workspaceId);
+		await this.withRunningStatusInvalidated(workspaceId, () =>
+			removeCodeContainer(this.storage, this.dockerRunner, workspaceId),
+		);
 		// Deletion, not recycling — so the demo-mode /config volume goes too.
 		await removeCodeVolume(this.dockerRunner, workspaceId);
 	}
@@ -287,7 +312,9 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	}
 
 	async stopCodeContainer(workspaceId: WorkspaceId): Promise<void> {
-		await stopCodeContainer(this.storage, this.dockerRunner, workspaceId);
+		await this.withRunningStatusInvalidated(workspaceId, () =>
+			stopCodeContainer(this.storage, this.dockerRunner, workspaceId),
+		);
 	}
 
 	async stopWorkspaceSim(workspaceId: WorkspaceId): Promise<boolean> {
@@ -295,11 +322,15 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	}
 
 	async removeCodeContainer(workspaceId: WorkspaceId): Promise<void> {
-		await removeCodeContainer(this.storage, this.dockerRunner, workspaceId);
+		await this.withRunningStatusInvalidated(workspaceId, () =>
+			removeCodeContainer(this.storage, this.dockerRunner, workspaceId),
+		);
 	}
 
 	async stopWorkspaceContainers(workspaceId: WorkspaceId): Promise<void> {
-		await stopWorkspaceContainers(this.storage, this.dockerRunner, workspaceId);
+		await this.withRunningStatusInvalidated(workspaceId, () =>
+			stopWorkspaceContainers(this.storage, this.dockerRunner, workspaceId),
+		);
 	}
 
 	async restartCodeContainer(
@@ -326,12 +357,21 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	async ensureCodeContainer(
 		workspace: WorkspaceRow,
 	): Promise<CodeContainerStatus> {
+		const cached = this.runningStatuses.get(workspace.id);
+		if (cached) {
+			// A negative age means the wall clock stepped back; treat it as stale.
+			const age = Date.now() - cached.at;
+			if (age >= 0 && age < RUNNING_STATUS_TTL_MS) {
+				return cached.status;
+			}
+		}
 		const key = `code:${workspace.id}`;
 		const existing = this.activeEnsures.get(key);
 		if (existing) {
 			return existing;
 		}
 
+		const epoch = this.runningStatusEpoch;
 		const pending = this.ensureCodeContainerInner(workspace).catch((error) => {
 			if (error instanceof CapacityExceededError) {
 				throw error;
@@ -340,9 +380,29 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		});
 		this.activeEnsures.set(key, pending);
 		try {
-			return await pending;
+			const status = await pending;
+			if (status.state === "running" && this.runningStatusEpoch === epoch) {
+				this.runningStatuses.set(workspace.id, { status, at: Date.now() });
+			}
+			return status;
 		} finally {
-			this.activeEnsures.delete(key);
+			// A restart may have replaced this entry with its own ensure.
+			if (this.activeEnsures.get(key) === pending) {
+				this.activeEnsures.delete(key);
+			}
+		}
+	}
+
+	/** Runs a stop or remove, then drops the cached status even if it threw. */
+	private async withRunningStatusInvalidated(
+		workspaceId: WorkspaceId,
+		action: () => Promise<void>,
+	): Promise<void> {
+		try {
+			await action();
+		} finally {
+			this.runningStatuses.delete(workspaceId);
+			this.runningStatusEpoch += 1;
 		}
 	}
 
@@ -390,15 +450,47 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		]);
 	}
 
-	private async ensureImage(): Promise<void> {
-		const image = this.storage.config.codeImage;
-		const result = await this.runDocker(["image", "inspect", image], true);
-		if (result.exitCode !== 0) {
+	/** Returns the code image ID that containers are created from. */
+	private async ensureImage(): Promise<string> {
+		const imageId = await this.currentCodeImageId();
+		if (imageId === null) {
+			const image = this.storage.config.codeImage;
 			log.error("code image not available", { image });
 			throw new Error(
 				`CODE image ${image} is not available. Build it with bun run docker:build:workspace.`,
 			);
 		}
+		return imageId;
+	}
+
+	/** Pins the code image ID at boot, before any `docker compose pull`. */
+	pinCodeImageId(): void {
+		void this.currentCodeImageId().catch((err: unknown) => {
+			log.warn("code image ID not pinned at boot", {
+				err: err instanceof Error ? err : new Error(String(err)),
+			});
+		});
+	}
+
+	/**
+	 * The code image tag's ID, pinned on first resolution so a later
+	 * `docker compose pull` changes nothing until the control plane restarts.
+	 * Control and workspace images are released together, so an update always
+	 * restarts it. Null while the image is missing.
+	 */
+	private async currentCodeImageId(): Promise<string | null> {
+		if (this.codeImageId) {
+			return this.codeImageId;
+		}
+		const image = this.storage.config.codeImage;
+		const result = await this.runDocker(
+			["image", "inspect", "--format", "{{.Id}}", image],
+			true,
+		);
+		const id = result.stdout.trim();
+		if (result.exitCode !== 0 || !id) return null;
+		this.codeImageId ??= id;
+		return this.codeImageId;
 	}
 
 	private async withPortReservationLock<T>(
@@ -506,7 +598,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		workspace: WorkspaceRow,
 		name: string,
 		container: DockerInspectContainer,
-	): Promise<CodeContainerStatus | null> {
+	): Promise<CodeContainerStatus | "recreate-in-slot" | null> {
 		if (!v2LabelsMatch(container, workspace.id)) {
 			await this.runDocker(["rm", "-f", name], true);
 			return null;
@@ -527,6 +619,33 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 				from: actualConfigMount,
 				to: expectedConfigMount,
 			});
+			await this.runDocker(["rm", "-f", name], true);
+			return null;
+		}
+
+		// A pulled workspace image only reaches students through new containers.
+		// Recreating here replaces running `coderunner rebuild-workspaces` after
+		// every update: a container created by an earlier control plane is on an
+		// earlier image, so it is recycled with this release's run arguments. A
+		// container with no label predates this check, so it is stale too.
+		const expectedImageId = await this.currentCodeImageId();
+		const createdImageId = container.Config?.Labels?.[CODE_IMAGE_ID_LABEL];
+		if (expectedImageId !== null && createdImageId !== expectedImageId) {
+			log.info("recreating code container for a new workspace image", {
+				workspaceId: workspace.id,
+				from: createdImageId,
+				to: expectedImageId,
+			});
+			if (container.State?.Running) {
+				// The running container already holds a capacity slot. Hand it to
+				// the replacement under the admission lock, so no other workspace
+				// can take it between this rm and the create.
+				await this.withAdmissionLock(async () => {
+					await this.runDocker(["rm", "-f", name], true);
+					this.pendingCreates += 1;
+				});
+				return "recreate-in-slot";
+			}
 			await this.runDocker(["rm", "-f", name], true);
 			return null;
 		}
@@ -600,7 +719,7 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 		vscodePort: number | null,
 		halsimPort: number | null,
 	): Promise<CodeContainerStatus> {
-		await this.ensureImage();
+		const imageId = await this.ensureImage();
 		const config = this.storage.config;
 		const homePath = workspaceHomePath(workspace);
 		await mkdir(homePath, { recursive: true, mode: 0o700 });
@@ -638,6 +757,13 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			"frc-sim.role=code",
 			"--label",
 			`frc-sim.workspace=${workspace.id}`,
+			// Compared on adoption against the same `docker image inspect` ID,
+			// so the check never depends on how the image store formats IDs. It
+			// marks the control-plane process that created the container: after a
+			// pull, the tag below may already be newer, and the next process
+			// recycles the container anyway.
+			"--label",
+			`${CODE_IMAGE_ID_LABEL}=${imageId}`,
 			// Mount sources are resolved by the Docker daemon against the HOST
 			// filesystem, so they go through toHostPath (a no-op outside the
 			// containerized deployment). Docker requires -v for SELinux relabeling;
@@ -702,11 +828,12 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 			}
 		}
 
-		args.push(this.storage.config.codeImage);
+		args.push(config.codeImage);
 		log.info("creating code container", {
 			workspaceId: workspace.id,
 			name,
 			image: this.storage.config.codeImage,
+			imageId,
 			simPort,
 			vscodePort,
 			halsimPort,
@@ -789,21 +916,26 @@ export class LocalDockerRuntimeProvider implements WorkspaceRuntimeProvider {
 	): Promise<CodeContainerStatus> {
 		const expectedName = codeContainerName(workspace.id);
 		const existing = await this.inspectContainer(expectedName);
+		let slotReserved = false;
 		if (existing) {
 			const adopted = await this.adoptCodeContainer(
 				workspace,
 				expectedName,
 				existing,
 			);
-			if (adopted) {
+			if (adopted === "recreate-in-slot") {
+				slotReserved = true;
+			} else if (adopted) {
 				return adopted;
 			}
 		}
 
 		// Admission control: serialize capacity check + pending increment
-		await this.withAdmissionLock(async () => {
-			await this.checkCapacity();
-		});
+		if (!slotReserved) {
+			await this.withAdmissionLock(async () => {
+				await this.checkCapacity();
+			});
+		}
 
 		const createdAt = performance.now();
 		let createdOk = false;

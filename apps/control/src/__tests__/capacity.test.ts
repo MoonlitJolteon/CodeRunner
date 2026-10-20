@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import {
 	cookieFrom,
 	createFakeDocker,
@@ -20,7 +20,14 @@ function fakeContainerFor(
 	return undefined;
 }
 
+// Step past the provider's running-status cache, so a change made directly on
+// the fake (behind the provider's back) is seen by the next ensure.
+function expireRunningStatusCache() {
+	setSystemTime(new Date(Date.now() + 3_000));
+}
+
 // Simulate the idle sweep: stop (but do not remove) a workspace's container.
+// The real sweep stops through the provider, which drops its cached status.
 function stopFakeContainer(
 	fakeDocker: ReturnType<typeof createFakeDocker>,
 	workspaceId: string,
@@ -30,7 +37,12 @@ function stopFakeContainer(
 		throw new Error(`no fake container for workspace ${workspaceId}`);
 	}
 	container.running = false;
+	expireRunningStatusCache();
 }
+
+afterEach(() => {
+	setSystemTime();
+});
 
 describe("container concurrency cap", () => {
 	test("ensureCodeContainer throws CapacityExceededError when at cap", async () => {
@@ -275,6 +287,60 @@ describe("container concurrency cap", () => {
 				simPortRange: { start: 45900, end: 45910 },
 				vscodePortRange: { start: 46900, end: 46910 },
 				halsimPortRange: { start: 47900, end: 47910 },
+			},
+		);
+	});
+
+	test("recycling a running container onto a new image keeps its slot", async () => {
+		const fakeDocker = createFakeDocker();
+		let carolEnsure: Promise<unknown> | null = null;
+		let aliceName = "";
+		let startCarol = () => {};
+		const runner: typeof fakeDocker.runner = async (args) => {
+			const result = await fakeDocker.runner(args);
+			if (args[0] === "rm" && args[2] === aliceName && !carolEnsure) {
+				// Another workspace asks for a slot right after alice's stale
+				// container is removed, before her replacement is created.
+				startCarol();
+				await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+			}
+			return result;
+		};
+		await withApp(
+			async (app) => {
+				// Cap at 2, filled by alice and bob.
+				await login(app, "alice");
+				await login(app, "bob");
+				await login(app, "carol");
+				const alice = workspaceBySlug(app, "alice");
+				const bob = workspaceBySlug(app, "bob");
+				const carol = workspaceBySlug(app, "carol");
+				await app.containers.ensureCodeContainer(alice);
+				await app.containers.ensureCodeContainer(bob);
+
+				// Alice's container was created from an older workspace image.
+				const aliceContainer = fakeContainerFor(fakeDocker, alice.id);
+				if (!aliceContainer) throw new Error("no container for alice");
+				aliceContainer.labels["frc-sim.image-id"] = "sha256:older";
+				aliceName = aliceContainer.name;
+				expireRunningStatusCache();
+				startCarol = () => {
+					carolEnsure = app.containers.ensureCodeContainer(carol);
+					carolEnsure.catch(() => {});
+				};
+
+				const status = await app.containers.ensureCodeContainer(alice);
+				expect(status.state).toBe("running");
+				expect(carolEnsure).not.toBeNull();
+				await expect(carolEnsure).rejects.toThrow(/capacity/i);
+			},
+			{
+				dockerRunner: runner,
+				codeImage: "coderunner-workspace:test",
+				maxActiveContainers: 2,
+				simPortRange: { start: 45950, end: 45960 },
+				vscodePortRange: { start: 46950, end: 46960 },
+				halsimPortRange: { start: 47950, end: 47960 },
 			},
 		);
 	});

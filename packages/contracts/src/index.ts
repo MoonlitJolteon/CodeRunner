@@ -49,6 +49,8 @@ export const sessionResponseSchema = z.object({
 		avatarUrl: z.string().url().nullable(),
 		slug: workspaceSlugSchema,
 		role: z.enum(["student", "admin"]),
+		/** Present for classroom guests (decision 043). */
+		guest: z.object({ classroomEndsAt: z.string() }).optional(),
 	}),
 	workspace: z.object({
 		id: workspaceIdSchema,
@@ -60,11 +62,35 @@ export const sessionResponseSchema = z.object({
 	demo: z.boolean().optional(),
 });
 
-export const authProviderSchema = z.enum(["github", "google", "authentik"]);
+export const authProviderSchema = z.enum([
+	"github",
+	"google",
+	"auth0",
+	"authentik",
+]);
 
 export const authProvidersResponseSchema = z.object({
 	providers: z.array(authProviderSchema),
 });
+
+export const CLASSROOM_CODE_PATTERN = /^\d{6}$/u;
+
+export const classroomJoinRequestSchema = z.object({
+	code: z.string().regex(CLASSROOM_CODE_PATTERN),
+	// Full name rules live in the control plane (normalizeDisplayName); this is
+	// only a size guard.
+	name: z.string().max(200),
+	confirmExisting: z.boolean().optional(),
+});
+
+export const classroomJoinErrorSchema = z.object({
+	code: z.string(),
+	message: z.string(),
+	displayName: z.string().optional(),
+});
+
+export type ClassroomJoinRequest = z.infer<typeof classroomJoinRequestSchema>;
+export type ClassroomJoinError = z.infer<typeof classroomJoinErrorSchema>;
 
 export const heartbeatResponseSchema = z.object({
 	ok: z.literal(true),
@@ -138,6 +164,7 @@ export const simRunStatusSchema = z.enum([
 	"error",
 ]);
 export const simRunCommandSchema = z.enum(["start", "stop", "restart"]);
+export const simRunModeSchema = z.enum(["run", "debug", "build"]);
 export const dsModeSchema = z.enum(["auto", "teleop", "test"]);
 export const allianceStationSchema = z.enum([
 	"red1",
@@ -155,6 +182,7 @@ export const bridgeConnectionSchema = z.enum([
 
 export const simRunCommandRequestSchema = z.object({
 	action: simRunCommandSchema,
+	mode: simRunModeSchema.optional(),
 });
 
 export const driverStationPatchSchema = z
@@ -286,6 +314,7 @@ export type RunClientMessage = z.infer<typeof runClientMessageSchema>;
 export type RunServerMessage = z.infer<typeof runServerMessageSchema>;
 export type SimRunStatus = z.infer<typeof simRunStatusSchema>;
 export type SimRunCommand = z.infer<typeof simRunCommandSchema>;
+export type SimRunMode = z.infer<typeof simRunModeSchema>;
 export type DsMode = z.infer<typeof dsModeSchema>;
 export type AllianceStation = z.infer<typeof allianceStationSchema>;
 export type BridgeConnection = z.infer<typeof bridgeConnectionSchema>;

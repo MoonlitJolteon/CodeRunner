@@ -14,6 +14,7 @@ import type {
 	AutoChooserPatch,
 	AutoChoosersResponse,
 	DriverStationPatch,
+	SimRunMode,
 	SimRunStatus,
 	SimStatusResponse,
 } from "@/lib/contracts";
@@ -49,7 +50,7 @@ interface DriverStationProps {
 		onSelect: (info: GamepadInfo) => void;
 		onRelease: () => void;
 	};
-	onStartRun: () => void;
+	onStartRun: (mode: SimRunMode) => void;
 	onStopRun: () => void;
 	onRestartRun: () => void;
 	onSetDriverStation: (patch: DriverStationPatch) => void;

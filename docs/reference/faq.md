@@ -43,17 +43,21 @@ for Gradle, project compilation, and simulation. The editor includes the
 **wpilibsuite.vscode-wpilib 2026.1.1** extension. Students do not need Java or
 VS Code installed on their own devices.
 
-### Can I build or start simulation from the WPILib extension?
+### Can I build, debug, or start a simulation from the WPILib extension?
 
-You can use the extension's build commands. Its simulation command should also
-work technically, but you should not use it in CodeRunner. Start simulations
-with **Start** in the Driver Station so CodeRunner uses its supported headless
+Use CodeRunner's controls in the Driver Station. Select **Start**, **Debug**,
+or **Build** from the **▾** beside the main button, then click the button to run
+that mode. The extension's commands may work technically, but do not use them
+in CodeRunner. The Driver Station uses CodeRunner's supported headless
 simulation path and connects the controls and telemetry. When robot code and
 communications are ready, choose a mode and click **Enable**.
 
 ### Do students need accounts? What if I just want to try it?
 
-For a real team deployment, students sign in with GitHub or Google, whichever OAuth provider you configure. You control who is allowed in via an email/domain allowlist. No accounts are created in advance; students sign in with their existing provider accounts, and their workspace is created automatically on first login.
+Students can sign in with GitHub or Google if their email is on the operator's
+allowlist. For a short classroom session, an admin can share a code so students
+can join with just a name. Guest accounts and projects are deleted when the
+classroom ends.
 
 For a solo evaluation or demo, start the demo stack (`CODERUNNER_DEMO_MODE=1 docker compose up`, or `bun run demo:docker`). Demo mode bypasses all authentication. See [Quick Start (Installation)](../quick-start.md).
 
