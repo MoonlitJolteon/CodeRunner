@@ -117,6 +117,15 @@ COPY containers/code/root/ /
 RUN chmod +x /etc/s6-overlay/s6-rc.d/init-frc-setup/run \
              /etc/s6-overlay/s6-rc.d/svc-vscodium-web/run
 
+# The base init re-chowns /app/vscodium-web to the runtime PUID on every new
+# container: one overlayfs copy-up per file, minutes on slow storage. The
+# server only reads it, so drop the chown and make it world-readable instead
+# (decision 047).
+RUN sed -i '\|^lsiown -R abc:abc /app/vscodium-web$|d' \
+        /etc/s6-overlay/s6-rc.d/init-vscodium-web/run \
+    && ! grep -q '/app/vscodium-web' /etc/s6-overlay/s6-rc.d/init-vscodium-web/run \
+    && chmod -R a+rX /app/vscodium-web
+
 # ── Download and install VS Code extensions ────────────────────────────
 ARG REDHAT_JAVA_VERSION=1.55.0
 ARG WPILIB_EXT_VERSION=2026.1.1
